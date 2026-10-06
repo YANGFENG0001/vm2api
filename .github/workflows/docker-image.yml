@@ -1,0 +1,187 @@
+# 构建并发布 vm2api 控制面镜像到 GitHub Container Registry (GHCR)。
+#
+# 结构参照 CLIProxyAPI 的 docker-image.yml：
+#   amd64 / arm64 分别构建并推送单架构 tag，最后一个 job 合并成多架构 manifest。
+#
+# 两个必须注意的点：
+#   1. amd64 用仓库根目录 Dockerfile。镜像里的 bin/*（amd64 ELF）、web/dist、
+#      share/wrap-cli 都已随 git 提交，所以不需要在 CI 里编译任何东西。
+#   2. arm64 必须用 deploy/Dockerfile.arm64-control。根 Dockerfile 里装的是
+#      amd64 ELF，如果拿根 Dockerfile 去构建 arm64，会得到一个根本跑不起来的镜像。
+#      arm64 镜像在容器内自行编译 arm64 的 kin-worker / kin-egress，并用 QEMU
+#      运行 amd64 的槽位负载。
+#
+# 触发策略：只在 push 到 main 和手动触发时发布，产出 `:latest`。
+# 上游自带的 release.yml 会在 v* tag 上发布同样的镜像，这里不再重复触发；
+# 如果确实想按 tag 发布版本镜像，取消下面 tags 那行的注释，并先禁用 release.yml。
+name: docker-image
+
+on:
+  push:
+    branches: [main]
+    # tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: docker-image-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # amd64：仓库根目录 Dockerfile
+  # ---------------------------------------------------------------------------
+  amd64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve image reference
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            ref="${GITHUB_REF_NAME}"
+          else
+            ref="latest"
+          fi
+          {
+            echo "image=ghcr.io/${owner}/vm2api"
+            echo "ref=${ref}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (amd64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          provenance: false
+          push: true
+          tags: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.ref }}-amd64
+          cache-from: type=gha,scope=vm2api-amd64
+          cache-to: type=gha,scope=vm2api-amd64,mode=max
+
+  # ---------------------------------------------------------------------------
+  # arm64：deploy/Dockerfile.arm64-control（原生 arm64 控制面 + QEMU 跑 amd64 槽负载）
+  # 只需要 amd64 的话，删掉本 job 和下面的 manifest job 即可。
+  # ---------------------------------------------------------------------------
+  arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve image reference
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            ref="${GITHUB_REF_NAME}"
+          else
+            ref="latest"
+          fi
+          {
+            echo "image=ghcr.io/${owner}/vm2api"
+            echo "ref=${ref}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.arm64-control
+          platforms: linux/arm64
+          provenance: false
+          push: true
+          tags: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.ref }}-arm64
+          cache-from: type=gha,scope=vm2api-arm64
+          cache-to: type=gha,scope=vm2api-arm64,mode=max
+
+  # ---------------------------------------------------------------------------
+  # manifest：把两个单架构镜像合并成多架构 tag
+  # ---------------------------------------------------------------------------
+  manifest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [amd64, arm64]
+    steps:
+      - name: Resolve image reference
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            ref="${GITHUB_REF_NAME}"
+          else
+            ref="latest"
+          fi
+          {
+            echo "image=ghcr.io/${owner}/vm2api"
+            echo "ref=${ref}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push multi-arch manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="${{ steps.meta.outputs.image }}"
+          ref="${{ steps.meta.outputs.ref }}"
+          docker buildx imagetools create \
+            -t "${image}:${ref}" \
+            "${image}:${ref}-amd64" \
+            "${image}:${ref}-arm64"
+          if [ "${ref}" != "latest" ]; then
+            docker buildx imagetools create \
+              -t "${image}:latest" \
+              "${image}:${ref}-amd64" \
+              "${image}:${ref}-arm64"
+          fi
+          docker buildx imagetools inspect --raw "${image}:${ref}" | python3 -c '
+          import json, sys
+          found = {(m.get("platform") or {}).get("architecture") for m in json.load(sys.stdin).get("manifests", [])}
+          missing = {"amd64", "arm64"} - found
+          assert not missing, f"manifest list lacks {sorted(missing)}"
+          print("manifest platforms:", sorted(p for p in found if p))
+          '

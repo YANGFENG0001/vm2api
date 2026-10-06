@@ -1,0 +1,115 @@
+# 定时把上游 dofastted/vm2api 的 main 合并进本 fork 的 main，保持同步。
+#
+# 手动触发：Actions → sync-upstream → Run workflow。
+# 自动触发：每天 03:17 UTC（北京时间 11:17）。
+#
+# ---------------------------------------------------------------------------
+# ⚠️ 强烈建议配置一个 PAT 放进仓库 Secret `SYNC_TOKEN`。
+#
+# 用默认的 GITHUB_TOKEN 会有两个硬伤：
+#   1. GITHUB_TOKEN 不允许推送对 .github/workflows/ 下文件的改动
+#      （报错 "refusing to allow a GitHub App to create or update workflow"）。
+#      而上游几乎每次发版都会改自己的工作流文件，所以同步大概率直接失败。
+#   2. GITHUB_TOKEN 推送产生的 commit 不会触发其它工作流 —— 也就是说同步成功后
+#      docker-image.yml 不会自动构建新镜像。
+#
+# PAT 做法：GitHub → Settings → Developer settings → Personal access tokens
+#   · classic：勾选 repo + workflow
+#   · 或 fine-grained：对本仓库授予 Contents: Read and write + Workflows: Read and write
+# 然后 仓库 Settings → Secrets and variables → Actions → New repository secret，
+# 名字填 SYNC_TOKEN。没配的话会自动回退到 GITHUB_TOKEN，并输出一条 warning。
+# ---------------------------------------------------------------------------
+name: sync-upstream
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      upstream_branch:
+        description: '上游分支（默认 main）'
+        required: false
+        default: 'main'
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Warn when SYNC_TOKEN is missing
+        env:
+          SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
+        run: |
+          if [ -z "${SYNC_TOKEN}" ]; then
+            echo "::warning::未配置 SYNC_TOKEN，将回退到 GITHUB_TOKEN：无法推送 .github/workflows 下的改动，也不会触发 docker-image.yml。"
+          fi
+
+      - name: Checkout fork main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add and fetch upstream
+        run: |
+          git remote add upstream https://github.com/dofastted/vm2api.git 2>/dev/null \
+            || git remote set-url upstream https://github.com/dofastted/vm2api.git
+          git fetch upstream --tags --prune
+
+      - name: Merge upstream into main
+        id: merge
+        shell: bash
+        env:
+          UPSTREAM_BRANCH: ${{ github.event.inputs.upstream_branch || 'main' }}
+        run: |
+          set -euo pipefail
+          git checkout main
+          upstream_ref="upstream/${UPSTREAM_BRANCH}"
+          if ! git rev-parse --verify --quiet "${upstream_ref}" >/dev/null; then
+            echo "::error::上游分支 ${upstream_ref} 不存在"
+            exit 1
+          fi
+          if git merge-base --is-ancestor "${upstream_ref}" HEAD; then
+            echo "已经是最新，无需同步。"
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          if git merge --no-edit "${upstream_ref}"; then
+            echo "changed=true" >> "${GITHUB_OUTPUT}"
+          else
+            git merge --abort || true
+            echo "::error::与上游 ${upstream_ref} 合并时发生冲突，已中止合并，未做任何推送。请在本地手动解决冲突后再推送。"
+            exit 1
+          fi
+
+      - name: Push to fork
+        if: steps.merge.outputs.changed == 'true'
+        run: git push origin main
+
+      - name: Write job summary
+        if: always()
+        run: |
+          {
+            echo "### 上游同步结果"
+            echo ""
+            if [ "${{ steps.merge.outputs.changed }}" = "true" ]; then
+              echo "- ✅ 已合并上游并推送到 \`main\`"
+            elif [ "${{ steps.merge.outputs.changed }}" = "false" ]; then
+              echo "- ⏭️ 已是最新，无需同步"
+            else
+              echo "- ⚠️ 未完成，详见上方日志"
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
