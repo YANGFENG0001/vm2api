@@ -42,10 +42,15 @@
 #   manifest → ghcr.io/<owner>/vm2api:vX.Y.Z   以及   ghcr.io/<owner>/vm2api:latest
 #
 # 触发时机：
-#   · 每 15 分钟轮询上游 releases（无变化时只跑一次 API 调用，约 10 秒）
-#   · sync-upstream 每次跑完就跟着跑（复用它的 10 分钟心跳，延迟更低）
+#   · main / mirror-trigger 分支的 push。主力是家宽机 108 上的 systemd timer：
+#     每 5 分钟查一次 fork GHCR 是否缺上游最新 tag，缺就往 mirror-trigger 推空提交。
+#   · sync-upstream 跑完自动跟一次（workflow_run）
 #   · 手动 workflow_dispatch（可指定版本 / 一次性补齐最近 N 版）
-#   · 本文件自身被修改
+#
+# ⚠️ 为什么不能只靠 schedule：
+#   GitHub 对 fork 仓库不运行 schedule 事件。实测本 fork 建立 20 小时、
+#   同时挂了 */10 和 */15 两个 cron，跨过多个 cron 边界仍为 0 次运行，
+#   用 API disable→enable 重注册后依旧 0 次。所以必须有一个仓库外部的触发器。
 #
 # 前置条件：
 #   1. 仓库 Settings → Actions → General → Workflow permissions
@@ -64,9 +69,10 @@ on:
     workflows: ["sync-upstream"]
     types: [completed]
   push:
-    branches: [main]
-    paths:
-      - '.github/workflows/docker-image.yml'
+    # main 分支的任何推送（上游合并、工作流改动）都顺带对齐一次镜像；
+    # mirror-trigger 是家宽机守护进程在发现 fork GHCR 缺上游新版本时推的空提交分支。
+    # GitHub 对 fork 仓库不运行 schedule 事件，所以必须有一个外部触发器。
+    branches: [main, mirror-trigger]
   workflow_dispatch:
     inputs:
       tag:
