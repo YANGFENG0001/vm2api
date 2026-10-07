@@ -120,7 +120,12 @@ on:
         default: false
 
 concurrency:
-  group: docker-image
+  # 按 ref 分组。sync-upstream 合并完会推 main，timer 同时在推 mirror-trigger，
+  # 两个 push 会在 30 秒内各触发一次本工作流。若共用一个 group，后到的那次会
+  # 把先前 pending 的那次**直接取消**（GitHub 的行为：同组内新的 pending
+  # 会取消旧的 pending），Actions 列表里就会莫名出现 cancelled。
+  # 分开就没这个问题；重复搬运是幂等的，多跑一次没有副作用。
+  group: docker-image-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
