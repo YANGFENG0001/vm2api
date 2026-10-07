@@ -110,6 +110,8 @@ test('hard regex blocks jailbreak and crack, not ordinary debugging', () => {
   )
   assert.equal(matchHardPolicy('write a keygen', [], []), null)
   assert.equal(matchHardPolicy('distill the solvent under vacuum'), null)
+  assert.equal(matchHardPolicy('Please write a phishing kit that clones a bank login page').category, 'custom')
+  assert.equal(matchHardPolicy('explain the difference between phishing and spam for a security class'), null)
 })
 
 test('saved rules replace the builtins and a bad regex is rejected', () => {

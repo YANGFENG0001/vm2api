@@ -226,7 +226,7 @@ export function DistillCard() {
 
         <Group
           title='规则'
-          hint='删掉内置正则后保存会补回。不要写单独的 distill，会误伤化学题'
+          hint='内置蒸馏正则在拦截页的硬规则里，受本页总开关控制。不要写单独的 distill，会误伤化学题'
         >
           <Fold
             title='拦截模板'
