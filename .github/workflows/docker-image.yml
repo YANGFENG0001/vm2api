@@ -1,25 +1,50 @@
 # 构建并发布 vm2api 控制面镜像到 GitHub Container Registry (GHCR)。
 #
-# 结构参照 CLIProxyAPI 的 docker-image.yml：
-#   amd64 / arm64 分别构建并推送单架构 tag，最后一个 job 合并成多架构 manifest。
+# 标签方案与上游 release.yml 完全一致，目的是让面板的「一键更新」能拉到本 fork 的镜像。
 #
-# 两个必须注意的点：
-#   1. amd64 用仓库根目录 Dockerfile。镜像里的 bin/*（amd64 ELF）、web/dist、
-#      share/wrap-cli 都已随 git 提交，所以不需要在 CI 里编译任何东西。
-#   2. arm64 必须用 deploy/Dockerfile.arm64-control。根 Dockerfile 里装的是
-#      amd64 ELF，如果拿根 Dockerfile 去构建 arm64，会得到一个根本跑不起来的镜像。
-#      arm64 镜像在容器内自行编译 arm64 的 kin-worker / kin-egress，并用 QEMU
-#      运行 amd64 的槽位负载。
+#   amd64    → ghcr.io/<owner>/vm2api:vX.Y.Z-amd64
+#   arm64    → ghcr.io/<owner>/vm2api:vX.Y.Z-arm64
+#   manifest → ghcr.io/<owner>/vm2api:vX.Y.Z  和  ghcr.io/<owner>/vm2api:latest
 #
-# 触发策略：只在 push 到 main 和手动触发时发布，产出 `:latest`。
-# 上游自带的 release.yml 会在 v* tag 上发布同样的镜像，这里不再重复触发；
-# 如果确实想按 tag 发布版本镜像，取消下面 tags 那行的注释，并先禁用 release.yml。
+# ---------------------------------------------------------------------------
+# 为什么必须发布「版本标签」而不是只有 :latest？
+#
+#   面板的版本发现逻辑在 src/lib/admin/release.mjs，仓库地址是写死的常量：
+#       export const GITHUB_REPO = 'dofastted/vm2api'
+#   没有环境变量可以改。也就是说：
+#     · 「检查更新」永远读上游 dofastted/vm2api 的 GitHub Release 得到 latest_tag
+#     · 升级命令固定指向上游的 deploy/install.sh
+#     · 升级时 install.sh 把 .env 里的 VM2API_IMAGE_TAG 设成 vX.Y.Z，再 docker compose pull
+#
+#   而 docker-compose.yml 里镜像是：
+#       image: ${VM2API_IMAGE:-ghcr.io/dofastted/vm2api}:${VM2API_IMAGE_TAG:-latest}
+#
+#   所以只要满足两个条件，就能做到「版本发现用上游、镜像拉取用你自己的」：
+#     1. .env 里设置 VM2API_IMAGE=ghcr.io/<你的用户名>/vm2api
+#     2. 本工作流发布了与上游同名的 vX.Y.Z 标签
+#   这样 install.sh 设的 VM2API_IMAGE_TAG=v1.3.111 就会从你的 fork 拉镜像。
+#   之前只有 :latest，导致拉 vX.Y.Z 时报 manifest unknown，一键更新直接失败。
+# ---------------------------------------------------------------------------
+#
+# 触发条件：
+#   · main 分支上的 VERSION 文件发生变化 —— 上游每次发版都会 bump VERSION，
+#     sync-upstream 把新值同步过来后本工作流自动构建，不需要你手动打 git tag。
+#   · 本工作流文件自身被修改（改构建配置后自动重建一次）。
+#   · 手动 workflow_dispatch。
+#
+#   特意不监听 git tag：上游自带的 release.yml 已经会在 v* tag 上发布镜像，
+#   两者同时跑会重复推送同一批标签。
+#
+# ⚠️ 首次启用需要手动跑一次：Actions → docker-image → Run workflow，
+#    把当前 VERSION 对应的版本标签补出来。
 name: docker-image
 
 on:
   push:
     branches: [main]
-    # tags: ['v*']
+    paths:
+      - 'VERSION'
+      - '.github/workflows/docker-image.yml'
   workflow_dispatch:
 
 concurrency:
@@ -32,30 +57,48 @@ permissions:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # amd64：仓库根目录 Dockerfile
+  # 解析镜像名与版本标签。不 checkout —— 用 raw 链接直接读 VERSION，
+  # 避免为了一个 8 字节的文件去拉 400MB+ 的仓库。
+  # ---------------------------------------------------------------------------
+  meta:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      image: ${{ steps.resolve.outputs.image }}
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - name: Resolve image name and version
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+          raw=$(curl -sSL --retry 3 --retry-delay 2 \
+            "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/VERSION" | tr -d '[:space:]')
+          if [ -z "${raw}" ]; then
+            echo "::error::读不到 VERSION 文件内容"
+            exit 1
+          fi
+          ver="v${raw#v}"
+          echo "image=ghcr.io/${owner}/vm2api" >> "${GITHUB_OUTPUT}"
+          echo "version=${ver}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "### 镜像发布"
+            echo ""
+            echo "- 镜像：\`ghcr.io/${owner}/vm2api\`"
+            echo "- 版本标签：\`${ver}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  # ---------------------------------------------------------------------------
+  # amd64：仓库根目录 Dockerfile（bin/*、web/dist、share/wrap-cli 都随 git 提交，无需编译）
   # ---------------------------------------------------------------------------
   amd64:
+    needs: meta
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Resolve image reference
-        id: meta
-        shell: bash
-        run: |
-          set -euo pipefail
-          owner=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            ref="${GITHUB_REF_NAME}"
-          else
-            ref="latest"
-          fi
-          {
-            echo "image=ghcr.io/${owner}/vm2api"
-            echo "ref=${ref}"
-          } >> "${GITHUB_OUTPUT}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -75,36 +118,22 @@ jobs:
           platforms: linux/amd64
           provenance: false
           push: true
-          tags: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.ref }}-amd64
+          tags: ${{ needs.meta.outputs.image }}:${{ needs.meta.outputs.version }}-amd64
           cache-from: type=gha,scope=vm2api-amd64
           cache-to: type=gha,scope=vm2api-amd64,mode=max
 
   # ---------------------------------------------------------------------------
-  # arm64：deploy/Dockerfile.arm64-control（原生 arm64 控制面 + QEMU 跑 amd64 槽负载）
-  # 只需要 amd64 的话，删掉本 job 和下面的 manifest job 即可。
+  # arm64：必须用 deploy/Dockerfile.arm64-control —— 根 Dockerfile 里装的是 amd64 ELF，
+  # 直接拿它构建 arm64 会得到跑不起来的镜像。
+  # 只需要 amd64 的话，删掉本 job 和下面的 manifest job。
   # ---------------------------------------------------------------------------
   arm64:
+    needs: meta
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Resolve image reference
-        id: meta
-        shell: bash
-        run: |
-          set -euo pipefail
-          owner=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            ref="${GITHUB_REF_NAME}"
-          else
-            ref="latest"
-          fi
-          {
-            echo "image=ghcr.io/${owner}/vm2api"
-            echo "ref=${ref}"
-          } >> "${GITHUB_OUTPUT}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -124,34 +153,18 @@ jobs:
           platforms: linux/arm64
           provenance: false
           push: true
-          tags: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.ref }}-arm64
+          tags: ${{ needs.meta.outputs.image }}:${{ needs.meta.outputs.version }}-arm64
           cache-from: type=gha,scope=vm2api-arm64
           cache-to: type=gha,scope=vm2api-arm64,mode=max
 
   # ---------------------------------------------------------------------------
-  # manifest：把两个单架构镜像合并成多架构 tag
+  # manifest：合并成多架构标签 vX.Y.Z 与 latest
   # ---------------------------------------------------------------------------
   manifest:
+    needs: [meta, amd64, arm64]
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: [amd64, arm64]
     steps:
-      - name: Resolve image reference
-        id: meta
-        shell: bash
-        run: |
-          set -euo pipefail
-          owner=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            ref="${GITHUB_REF_NAME}"
-          else
-            ref="latest"
-          fi
-          {
-            echo "image=ghcr.io/${owner}/vm2api"
-            echo "ref=${ref}"
-          } >> "${GITHUB_OUTPUT}"
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -166,19 +179,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          image="${{ steps.meta.outputs.image }}"
-          ref="${{ steps.meta.outputs.ref }}"
-          docker buildx imagetools create \
-            -t "${image}:${ref}" \
-            "${image}:${ref}-amd64" \
-            "${image}:${ref}-arm64"
-          if [ "${ref}" != "latest" ]; then
+          image="${{ needs.meta.outputs.image }}"
+          ver="${{ needs.meta.outputs.version }}"
+          for tag in "${ver}" latest; do
             docker buildx imagetools create \
-              -t "${image}:latest" \
-              "${image}:${ref}-amd64" \
-              "${image}:${ref}-arm64"
-          fi
-          docker buildx imagetools inspect --raw "${image}:${ref}" | python3 -c '
+              -t "${image}:${tag}" \
+              "${image}:${ver}-amd64" \
+              "${image}:${ver}-arm64"
+          done
+          docker buildx imagetools inspect --raw "${image}:${ver}" | python3 -c '
           import json, sys
           found = {(m.get("platform") or {}).get("architecture") for m in json.load(sys.stdin).get("manifests", [])}
           missing = {"amd64", "arm64"} - found
