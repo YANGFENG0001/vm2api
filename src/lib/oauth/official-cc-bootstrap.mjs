@@ -801,8 +801,6 @@ export function buildOfficialCcDockerArgs({
     'ANTHROPIC_API_KEY=',
     '-e',
     'ANTHROPIC_AUTH_TOKEN=',
-    '-e',
-    'CI=1',
     '-w',
     '/home/kincli',
     containerName(vmId),
@@ -811,6 +809,30 @@ export function buildOfficialCcDockerArgs({
       ? [text, '--print', '--permission-mode', 'bypassPermissions', '--output-format', 'stream-json', '--verbose']
       : ['-p', text, '--permission-mode', 'bypassPermissions', '--output-format', 'json']),
   ]
+}
+
+export function officialCcTurnSucceeded({ code, timedOut, raw, slash }) {
+  const text = String(raw || '').trim()
+  if (code !== 0 || timedOut || !text) return false
+  if (slash) {
+    return text.split('\n').some((line) => {
+      const row = line.trim()
+      if (!row) return false
+      try {
+        JSON.parse(row)
+        return true
+      } catch {
+        return false
+      }
+    })
+  }
+  let parsed
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return false
+  }
+  return !!parsed && typeof parsed === 'object' && !parsed.is_error && !parsed.error
 }
 
 export async function runOfficialCcTurn({
@@ -855,11 +877,14 @@ export async function runOfficialCcTurn({
   } catch {}
   let parsed = null
   let raw = ''
+  const slash = String(prompt || '')
+    .trim()
+    .startsWith('/')
   try {
     raw = fs.readFileSync(outFile, 'utf8').trim()
-    if (raw) parsed = JSON.parse(raw)
+    if (raw && !slash) parsed = JSON.parse(raw)
   } catch {}
-  const ok = finished.code === 0 && !finished.timed_out && !parsed?.is_error && !parsed?.error
+  const ok = officialCcTurnSucceeded({ code: finished.code, timedOut: finished.timed_out, raw, slash })
   return {
     ok,
     timed_out: !!finished.timed_out,

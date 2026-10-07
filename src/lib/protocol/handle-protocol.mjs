@@ -106,6 +106,7 @@ import {
   personaModeFromRoutingFile,
 } from '../identity/crs-persona.mjs'
 import { createDownstreamKeepalive } from './stream-keepalive.mjs'
+import { createAnthropicStreamTracker, isRecoverableTruncation } from './stream-truncation.mjs'
 import {
   hidePersonaUsageInSseLine,
   hidePersonaUsageOnMessage,
@@ -968,6 +969,7 @@ export function createHandleProtocol(deps) {
     const clientAbort = bindClientAbort(req, res)
 
     const clientStream = isClientStream(inbound, req.headers)
+    const streamTracker = clientStream && protocol === 'anthropic.messages' ? createAnthropicStreamTracker() : null
     const upstreamStream = true
     const requestedDelivery = String(
       req.headers['x-kin-delivery'] || getRouting()?.failover?.delivery_mode || 'realtime',
@@ -1255,6 +1257,7 @@ export function createHandleProtocol(deps) {
                 if (personaHideTokens) line = hidePersonaUsageInSseLine(line, personaHideTokens, cacheTtl)
                 keepalive.observeLine(line)
                 if (protocol === 'anthropic.messages') {
+                  streamTracker?.observe(line)
                   if (!res.headersSent) writeSSEHeaders(res)
                   res.write(String(line).endsWith('\n') ? String(line) : String(line) + '\n')
                   return
@@ -1368,6 +1371,8 @@ export function createHandleProtocol(deps) {
         stats.errors++
         logBag.error_code = result?.body?.error?.code || 'stream_incomplete'
         logBag.error_message = result?.body?.error?.message || 'Stream did not reach a verified terminal state'
+        const closing = isRecoverableTruncation(result) && !res.writableEnded ? streamTracker?.closingEvents() : null
+        if (closing) res.write(closing)
       }
       rememberRefusal({ inbound, body: ctx.body, headers: req.headers, result, logBag, requestId: logCtx.request_id })
       return res.end()

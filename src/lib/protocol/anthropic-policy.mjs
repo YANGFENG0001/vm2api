@@ -204,9 +204,13 @@ export function modelSupportsContextManagement(modelId = '') {
   return true
 }
 
-/** Haiku 400s `role 'system' is not supported on this model`. */
+/** Mid-conversation `role=system` 400s on Haiku and Claude 4.x. Confirmed on Opus/Sonnet 5. */
 export function modelSupportsMidConversationSystem(modelId = '') {
-  return !/haiku/i.test(String(modelId || ''))
+  const id = String(modelId || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\[1m\]$/i, '')
+  return /^claude-(?:opus|sonnet)-5(?:-5|\.5)?(?:-|$)/.test(id)
 }
 
 /**
