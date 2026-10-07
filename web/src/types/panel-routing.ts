@@ -94,6 +94,11 @@ export type PolicyQuestion = {
   builtin?: boolean
 }
 
+export type PolicyRule = {
+  category: string
+  source: string
+  enabled: boolean
+}
 /** `GET/PUT /api/panel/jev-intercept`。决策模型与硬正则。密钥只回 api_key_set。 */
 export type JevInterceptConfig = {
   enabled: boolean
@@ -135,6 +140,9 @@ export type JevInterceptConfig = {
   strip_reminders: boolean
   categories: string[]
   builtin_patterns: string[]
+  builtin_rules?: PolicyRule[]
+  rules?: PolicyRule[]
+  rules_customized?: boolean
   patterns: string[]
 }
 

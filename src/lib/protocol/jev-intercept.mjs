@@ -25,6 +25,7 @@ const TIMEOUT_MAX = 8000
 const TIMEOUT_DEFAULT = 2000
 const PATTERN_MAX = 50
 const PATTERN_LEN = 200
+const RULE_MAX = 60
 
 /**
  * User-text only. Official system prompts mention safety and exploits;
@@ -46,7 +47,7 @@ export const HARD_POLICY_RULES = Object.freeze([
     source: String.raw`(?:解除|关闭|绕过|无视)(?:你的|所有|全部)?(?:安全|内容)?(?:限制|审查|过滤|策略)`,
   },
   { category: 'jailbreak', source: String.raw`(?:越狱|破限)(?:模式|提示词|提示|指令)` },
-  { category: 'crack', source: String.raw`\b(?:keygen|warez)\b` },
+  { category: 'crack', source: String.raw`(?<![\w-])(?:keygen|warez)(?![\w-])` },
   { category: 'crack', source: String.raw`(?:破解补丁|注册机|激活码生成器)` },
   {
     category: 'crack',
@@ -205,7 +206,16 @@ export function defaultJevConfig() {
     expand_base64: true,
     strip_reminders: true,
     patterns: [],
+    rules: null,
   }
+}
+
+export function builtinHardRules() {
+  return HARD_POLICY_RULES.map((rule) => ({
+    category: rule.category,
+    source: rule.source,
+    enabled: true,
+  }))
 }
 
 function cleanPattern(source) {
@@ -217,6 +227,26 @@ function cleanPattern(source) {
     return ''
   }
   return text
+}
+
+function normalizeRules(raw) {
+  if (raw == null) return null
+  if (!Array.isArray(raw)) return null
+  const allowed = new Set([...JEV_CATEGORIES, 'custom'])
+  const out = []
+  const seen = new Set()
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const source = cleanPattern(item.source)
+    if (!source || seen.has(source) || out.length >= RULE_MAX) continue
+    seen.add(source)
+    out.push({
+      category: allowed.has(item.category) ? item.category : 'custom',
+      source,
+      enabled: item.enabled !== false,
+    })
+  }
+  return out
 }
 
 const KEY_MAX = 8
@@ -288,6 +318,7 @@ export function normalizeJevConfig(raw) {
     expand_base64: raw.expand_base64 !== false,
     strip_reminders: raw.strip_reminders !== false,
     patterns,
+    rules: normalizeRules(raw.rules),
   }
 }
 
@@ -333,8 +364,11 @@ export function publicJevConfig(cfg) {
       strip_reminders: true,
       timeout_ms: TIMEOUT_DEFAULT,
     },
-    categories: [...JEV_CATEGORIES],
+    categories: [...JEV_CATEGORIES, 'custom'],
     builtin_patterns: HARD_POLICY_RULES.map((rule) => rule.source),
+    builtin_rules: builtinHardRules(),
+    rules: (c.rules || builtinHardRules()).map((rule) => ({ ...rule })),
+    rules_customized: Array.isArray(c.rules),
     patterns: [...c.patterns],
   }
 }
@@ -433,6 +467,31 @@ export function validateJevPatch(body = {}) {
       problems.push('每题需要英文 id、问句，且不能重复')
     }
   }
+  if (Object.hasOwn(body, 'rules')) {
+    if (body.rules !== null && !Array.isArray(body.rules)) problems.push('rules 必须是数组')
+    else if (Array.isArray(body.rules)) {
+      if (body.rules.length > RULE_MAX) problems.push(`rules 最多 ${RULE_MAX} 条`)
+      else {
+        for (const item of body.rules) {
+          if (!item || typeof item !== 'object' || typeof item.source !== 'string') {
+            problems.push('每条规则需要 source')
+            break
+          }
+          const source = item.source.trim()
+          if (!source || source.length > PATTERN_LEN) {
+            problems.push(`单条规则最长 ${PATTERN_LEN}`)
+            break
+          }
+          try {
+            new RegExp(source, 'i')
+          } catch {
+            problems.push(`无效正则: ${source.slice(0, 80)}`)
+            break
+          }
+        }
+      }
+    }
+  }
   return problems
 }
 
@@ -452,6 +511,7 @@ export function applyJevPatch(settings, body = {}) {
           : []
         : current.api_keys,
     patterns: Object.hasOwn(body, 'patterns') ? body.patterns : current.patterns,
+    rules: Object.hasOwn(body, 'rules') ? body.rules : current.rules,
   })
   settings.set(JEV_SETTING, next)
   return { ok: true, config: publicJevConfig(next) }
@@ -473,20 +533,31 @@ function compileRule(category, source) {
   return { category, source: text, re: new RegExp(text, 'i') }
 }
 
-export function matchHardPolicy(text, extra = []) {
+export function matchHardPolicy(text, extra = [], rules = null) {
   const hay = String(text || '')
   if (!hay) return null
-  const rules = []
-  for (const rule of HARD_POLICY_RULES) {
-    const compiled = compileRule(rule.category, rule.source)
-    if (compiled) rules.push(compiled)
+  const compiled = []
+  const base = Array.isArray(rules) ? rules.filter((rule) => rule && rule.enabled !== false) : HARD_POLICY_RULES
+  for (const rule of base) {
+    const item = compileRule(rule.category || 'custom', rule.source)
+    if (item) compiled.push(item)
   }
   for (const source of extra || []) {
-    const compiled = compileRule('custom', source)
-    if (compiled) rules.push(compiled)
+    const item = compileRule('custom', source)
+    if (item) compiled.push(item)
   }
-  for (const rule of rules) {
-    if (rule.re.test(hay)) return { category: rule.category, evidence: rule.source.slice(0, 120) }
+  for (const rule of compiled) {
+    const found = rule.re.exec(hay)
+    if (!found) continue
+    const keyword = String(found[0] || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 40)
+    return {
+      category: rule.category,
+      evidence: rule.source.slice(0, 120),
+      keyword: keyword || rule.category,
+    }
   }
   return null
 }

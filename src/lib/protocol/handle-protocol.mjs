@@ -35,7 +35,7 @@ import {
 import { sanitizeInboundBody, defaultSeedPolicy } from './seed-policy.mjs'
 import { fingerprintRequest } from './client-fingerprint.mjs'
 import { validateOfficialModel } from './models.mjs'
-import { handleCodexProtocol } from './handle-codex.mjs'
+import { handleCodexProtocol, handleCodexSearch } from './handle-codex.mjs'
 import { detectInboundPlatform } from './platform-detect.mjs'
 import { normalizeCodexRouting } from './codex-route.mjs'
 import { hasClaudeCode1mSuffix } from './context-1m.mjs'
@@ -253,13 +253,17 @@ export function createHandleProtocol(deps) {
       devices: deviceRepo(),
       requestId,
     })
-    if (!decision) return false
+    if (!decision || decision.action !== 'block') {
+      if (decision?.intercept) logBag.intercept = decision.intercept
+      return false
+    }
     stats.errors++
     logBag.via = decision.via
     logBag.attempt_count = 0
     logBag.final_state = decision.final_state
     logBag.error_code = decision.error?.body?.error?.code || null
     logBag.error_message = decision.errorMessage || decision.error?.body?.error?.message || null
+    logBag.intercept = decision.intercept || null
     json(res, decision.error.status, decision.error.body)
     return true
   }
@@ -385,7 +389,7 @@ export function createHandleProtocol(deps) {
       noGoFallback,
       ensureCredential: (exec) => ensureWorkerCredential(exec),
       onEvent: async (line) => {
-        if (/kin_response_headers/.test(String(line))) return
+        if (/response_headers/.test(String(line))) return
         applyClaudeSSELineToMessage(restoreToolNamesInSSELine(line, toolNames), assembler)
       },
     })
@@ -1246,7 +1250,7 @@ export function createHandleProtocol(deps) {
                 onCommit()
               },
               onEvent: async (line) => {
-                if (/kin_response_headers/.test(String(line))) return
+                if (/response_headers/.test(String(line))) return
                 line = restoreToolNamesInSSELine(line, attemptMeta?.toolNames || {})
                 if (personaHideTokens) line = hidePersonaUsageInSseLine(line, personaHideTokens, cacheTtl)
                 keepalive.observeLine(line)
@@ -1400,5 +1404,86 @@ export function createHandleProtocol(deps) {
     return json(res, 200, ctx.body)
   }
 
-  return { handleProtocol, mapProtocolClientError, applyProtocolIntercept, streamAndAssembleClaudeMessage }
+  /** POST /v1/alpha/search (Codex web search): same logging, auth and body handling as handleProtocol. */
+  async function handleSearch(req, res, pathName) {
+    const protocol = 'openai.search'
+    const logCtx = requestLog.start(req, { protocol, pathName })
+    res._kinRequestId = logCtx.request_id
+    requestLog.tapResponse?.(logCtx, res)
+    const logBag = {
+      protocol,
+      model: null,
+      stream: false,
+      inbound_summary: null,
+      upstream_status: null,
+      vm_id: null,
+      account_id: null,
+      usage: null,
+      error_code: null,
+      error_message: null,
+      via: 'codex-search',
+      attempt_count: null,
+      final_state: null,
+    }
+    res.on('finish', () => {
+      try {
+        const groupId = req.apiKeyRecord?.group_id ?? 1
+        requestLog.finish(logCtx, {
+          status: res.statusCode || 0,
+          api_key_kind: req.apiKeyKind || null,
+          api_key_id: req.apiKeyRecord?.id || null,
+          user_id: req.apiKeyRecord?.user_id ?? null,
+          group_id: groupId,
+          rate_multiplier: deps.groupsRepo.rateMultiplier(groupId),
+          ...logBag,
+        })
+      } catch {}
+    })
+    if (!requireAuth(req, res)) {
+      logBag.error_code = req.authError?.code || ErrorCode.INVALID_API_KEY
+      logBag.error_message = req.authError?.message || 'Invalid credentials'
+      logBag.api_key_presented = presentedApiKeyForLog(req.presentedApiKey)
+      return
+    }
+    let body
+    try {
+      body = await readBody(req, cfg.limits.max_body_bytes)
+    } catch (error) {
+      stats.errors++
+      logBag.error_code = error?.body?.error?.code || ErrorCode.INVALID_JSON
+      logBag.error_message = error?.body?.error?.message || String(error?.message || error)
+      if (error?.body?.error) return json(res, error.status || 400, error.body)
+      return json(
+        res,
+        400,
+        makeError({
+          type: ErrorType.INVALID_REQUEST,
+          code: ErrorCode.INVALID_JSON,
+          message: String(error?.message || error),
+          status: 400,
+        }).body,
+      )
+    }
+    logBag.model = typeof body?.model === 'string' ? body.model : null
+    logBag.inbound_summary = summarizeBody(body)
+    return handleCodexSearch({
+      req,
+      res,
+      body,
+      logBag,
+      stats,
+      json,
+      routing: getRouting() || {},
+      projectRoot: cfg.paths.project,
+      stickyRouter,
+    })
+  }
+
+  return {
+    handleProtocol,
+    handleSearch,
+    mapProtocolClientError,
+    applyProtocolIntercept,
+    streamAndAssembleClaudeMessage,
+  }
 }

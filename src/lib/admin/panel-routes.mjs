@@ -3883,6 +3883,9 @@ export function createPanelHandler(ctx) {
         repo.clear()
         return json(res, 200, panel.ok(refusalGuardSnapshot()))
       }
+      if (req.method === 'GET' && p === '/api/panel/protocol-entry') {
+        return json(res, 200, panel.ok(requestLog.protocolEntryStats()))
+      }
       if (req.method === 'GET' && p === '/api/panel/jev-intercept') {
         return json(res, 200, panel.ok(jevInterceptSnapshot()))
       }

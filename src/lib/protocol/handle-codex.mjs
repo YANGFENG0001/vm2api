@@ -20,7 +20,16 @@ import { extraFromCodexHeaders, codexQuotaPark, CODEX_DEFAULT_PARK_MS } from './
 import { extractOpenaiUsage } from './openai-usage.mjs'
 import { streamCodexKernel } from '../transport/codex-kernel-client.mjs'
 import { ensureCodexKernel, writeCodexKernelConfig } from '../transport/codex-kernel-supervisor.mjs'
-import { boundProxyUrl } from '../vm/egress.mjs'
+import { boundProxyUrl, hostProxyUrlForVm, isLocalEgressProxy } from '../vm/egress.mjs'
+import { readCodexAccounts, upsertCodexAccount } from '../vm/codex-slot.mjs'
+import {
+  CODEX_APP_VERSION,
+  CODEX_CATALOG_ORIGINATOR,
+  CODEX_SEARCH_URL,
+  CODEX_USER_AGENT,
+  makeProxyFetch,
+  refreshCodexAccessToken,
+} from './codex-models.mjs'
 import { orderCodexSessionSlots, codexSlotAllowsModel, isCodexFailoverError } from '../pool/codex-slot-pool.mjs'
 import {
   reportOpenAIAttempt,
@@ -717,4 +726,208 @@ function rejectCodexAdmission({ res, json, stats, logBag, picked, model }) {
   return json(res, 503, {
     error: { type: 'api_error', code: picked.error || 'no_codex_vm', message: 'no Codex kernel VM is configured' },
   })
+}
+
+// Codex web search (`web.run`) is a plain JSON POST to `{base_url}/alpha/search`. Responses-Lite
+// models (gpt-6.1-sol, gpt-6-astra) have no hosted web_search tool, and the CLI fails the whole
+// turn on a non-2xx answer, so a missing route breaks every turn that searches.
+const CODEX_SEARCH_TIMEOUT_MS = 120000
+// The backend answers "Unknown parameter" for these.
+const CODEX_SEARCH_DROP_FIELDS = Object.freeze(['prompt_cache_key', 'prompt_cache_retention', 'store'])
+const searchRefreshes = new Map()
+
+function searchCredentials(projectRoot, vm) {
+  const first = readCodexAccounts(projectRoot, vm.id)[0] || {}
+  return {
+    first,
+    access: String(first.access_token || vm.codex?.access_token || '').trim(),
+    refresh: String(first.refresh_token || vm.codex?.refresh_token || '').trim(),
+    accountId: String(first.chatgpt_account_id || vm.codex?.chatgpt_account_id || '').trim(),
+  }
+}
+
+/**
+ * Access token to retry with after a 401/403. The kernel refreshes the same rotating
+ * refresh token on its own, so first adopt a token it wrote meanwhile; otherwise refresh
+ * once per slot, shared by concurrent callers.
+ */
+function refreshSearchAccess(projectRoot, vm, usedAccess, { proxyUrl, fetchImpl, refresh }) {
+  const now = searchCredentials(projectRoot, vm)
+  if (now.access && now.access !== usedAccess) return now.access
+  if (!now.refresh) return ''
+  let pending = searchRefreshes.get(vm.id)
+  if (!pending) {
+    pending = (async () => {
+      const tok = await refresh({ refreshToken: now.refresh, proxyUrl, fetchImpl })
+      if (!tok?.ok || !tok.access_token) return ''
+      upsertCodexAccount(projectRoot, vm.id, {
+        access_token: tok.access_token,
+        refresh_token: tok.refresh_token || now.refresh,
+        id_token: tok.id_token || now.first.id_token,
+        expires_at: tok.expires_at || now.first.expires_at,
+      })
+      return tok.access_token
+    })().finally(() => searchRefreshes.delete(vm.id))
+    searchRefreshes.set(vm.id, pending)
+  }
+  return pending
+}
+
+function plainHeaders(headers) {
+  if (typeof headers?.entries === 'function') return Object.fromEntries(headers.entries())
+  return { ...(headers || {}) }
+}
+
+/** One search call on one slot. Resolves `{ status, text, headers }`, or `{ status: 0, error }`. */
+async function postCodexSearch({ projectRoot, vm, body, turnMetadata, fetchImpl, refresh = refreshCodexAccessToken }) {
+  const proxyUrl = hostProxyUrlForVm(vm)
+  if (!fetchImpl && !proxyUrl && !isLocalEgressProxy(vm.proxy)) return { status: 0, error: 'proxy_required' }
+  const doFetch = fetchImpl || makeProxyFetch(proxyUrl, CODEX_SEARCH_TIMEOUT_MS, { maxMs: CODEX_SEARCH_TIMEOUT_MS })
+  const creds = searchCredentials(projectRoot, vm)
+  const send = async (access) => {
+    // Same identity as the slot's kernel; the backend wants originator, User-Agent and version to agree.
+    const headers = {
+      authorization: `Bearer ${access}`,
+      'content-type': 'application/json',
+      accept: 'application/json',
+      originator: CODEX_CATALOG_ORIGINATOR,
+      'user-agent': CODEX_USER_AGENT,
+      version: CODEX_APP_VERSION,
+    }
+    if (creds.accountId) headers['chatgpt-account-id'] = creds.accountId
+    if (turnMetadata) headers['x-codex-turn-metadata'] = turnMetadata
+    try {
+      const res = await doFetch(CODEX_SEARCH_URL, { method: 'POST', headers, body: JSON.stringify(body) })
+      return { status: Number(res?.status) || 0, text: await res.text(), headers: plainHeaders(res?.headers) }
+    } catch (e) {
+      return { status: 0, error: /abort/i.test(`${e?.name} ${e?.message}`) ? 'upstream_timeout' : 'upstream_transport' }
+    }
+  }
+  if (!creds.access && !creds.refresh) return { status: 0, error: 'no_oauth_token' }
+  let out = creds.access ? await send(creds.access) : { status: 401 }
+  if (out.status === 401 || out.status === 403) {
+    const access = await refreshSearchAccess(projectRoot, vm, creds.access, { proxyUrl, fetchImpl, refresh })
+    if (access) out = await send(access)
+  }
+  return out
+}
+
+function isSearchFailover(out) {
+  const status = Number(out?.status) || 0
+  return status === 0 || status === 401 || status === 402 || status === 403 || status === 429 || status >= 500
+}
+
+function parseJson(text) {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * POST /v1/alpha/search for Codex web search. Not inference: no session window, sticky bind
+ * or latency report, but the call holds a seat on the slot it runs on. Auth/quota/rate-limit
+ * failures move to the next GPT slot; anything else is the backend's answer, passed through.
+ */
+export async function handleCodexSearch({
+  req,
+  res,
+  body,
+  logBag,
+  stats,
+  json,
+  routing = {},
+  projectRoot,
+  stickyRouter = null,
+  ops = {},
+}) {
+  logBag.via = 'codex-search'
+  const reject = (status, type, code, message) => {
+    stats.errors++
+    logBag.error_code = code
+    return json(res, status, { error: { type, code, message } })
+  }
+  const codex = normalizeCodexRouting(routing.codex)
+  if (!codex.enabled) return reject(400, 'invalid_request_error', 'codex_disabled', 'Codex routing is disabled')
+  const restriction = restrictCodexClient(req.headers, body, { codex }, 'openai.search')
+  if (!restriction.ok) return reject(403, 'permission_error', restriction.code, restriction.message)
+  if (!body || typeof body !== 'object' || typeof body.model !== 'string' || !body.model.trim()) {
+    return reject(400, 'invalid_request_error', 'model_required', 'model is required')
+  }
+  const outbound = { ...body }
+  for (const key of CODEX_SEARCH_DROP_FIELDS) delete outbound[key]
+  const turnMetadata = headerString(req.headers, 'x-codex-turn-metadata')
+  const post = ops.postCodexSearch || postCodexSearch
+  const pickOpts = { stickyRouter, sessions: null, body: outbound, excluded: new Set() }
+  const deadline = Date.now() + codexWaitTimeoutMs(routing)
+  const gone = clientGoneSignal(req, res)
+  let last = null
+  let attempts = 0
+  try {
+    for (;;) {
+      const admitted = await admitCodexCandidate(projectRoot, req, pickOpts, { deadline, signal: gone.signal })
+      if (!admitted.lease) {
+        if (admitted.picked.error === 'client_cancelled') {
+          logBag.final_state = 'cancelled'
+          return
+        }
+        if (last) break
+        return rejectCodexAdmission({ res, json, stats, logBag, picked: admitted.picked, model: outbound.model })
+      }
+      try {
+        const vm = getVm(projectRoot, admitted.vmId)
+        pickOpts.excluded.add(admitted.vmId)
+        if (!vm || !isCodexVm(vm)) continue
+        if (!attempts) {
+          stats.requests++
+          stats.by_route['openai.search'] = (stats.by_route['openai.search'] || 0) + 1
+        }
+        attempts += 1
+        logBag.vm_id = vm.id
+        logBag.account_id = vm.id
+        logBag.attempt_count = attempts
+        last = await post({
+          projectRoot,
+          vm,
+          body: outbound,
+          turnMetadata,
+          fetchImpl: ops.fetchImpl,
+          refresh: ops.refresh,
+        })
+        logBag.upstream_status = last.status || null
+        ingestCodexHop(projectRoot, vm.id, {
+          ok: last.status >= 200 && last.status < 300,
+          status: last.status,
+          headers: last.headers || {},
+          body: parseJson(last.text),
+        })
+        if (!isSearchFailover(last)) break
+      } finally {
+        admitted.lease.release()
+      }
+    }
+  } finally {
+    gone.settle()
+  }
+  if (!last.status) {
+    logBag.final_state = 'upstream_error'
+    return reject(502, 'api_error', last.error || 'upstream_transport', 'Codex search upstream request failed')
+  }
+  const payload = parseJson(last.text)
+  if (payload === undefined) {
+    logBag.final_state = 'upstream_error'
+    return reject(
+      502,
+      'api_error',
+      'upstream_invalid_body',
+      `Codex search upstream answered ${last.status} without JSON`,
+    )
+  }
+  logBag.final_state = last.status < 300 ? 'verified' : 'upstream_error'
+  if (last.status >= 400) {
+    stats.errors++
+    logBag.error_code = payload?.error?.code || `upstream_${last.status}`
+  }
+  return json(res, last.status, payload)
 }

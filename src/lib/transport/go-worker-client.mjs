@@ -90,7 +90,7 @@ function workerRequest(
       requestHeaders['content-type'] = 'application/json'
       requestHeaders['content-length'] = String(payload.length)
     }
-    if (internalToken) requestHeaders['x-kin-internal-token'] = internalToken
+    if (internalToken) requestHeaders['x-internal-token'] = internalToken
     let timer = null
     const clearTimer = () => {
       if (timer) {
@@ -188,10 +188,10 @@ function publicHeaders(headers = {}) {
   return result
 }
 
-/** Flatten wrap `X-Kin-Rate-Limit-Headers` JSON into Anthropic Extra keys. */
+/** Flatten wrap `X-Rate-Limit-Headers` JSON into Anthropic Extra keys. */
 function mergeRateLimitHeaders(headers = {}) {
   const out = { ...headers }
-  const packed = headers['x-kin-rate-limit-headers']
+  const packed = headers['x-rate-limit-headers']
   if (!packed) return out
   try {
     const parsed = typeof packed === 'string' ? JSON.parse(packed) : packed
@@ -207,18 +207,18 @@ function mergeRateLimitHeaders(headers = {}) {
   return out
 }
 
-/** Parse the X-Kin-Usage / X-Kin-Model / X-Kin-Stop-Reason worker metadata. */
+/** Parse the X-Usage / X-Model / X-Stop-Reason worker metadata. */
 function streamMetaFromHeaders(headers = {}) {
   let usage = null
-  if (headers['x-kin-usage']) {
+  if (headers['x-usage']) {
     try {
-      usage = JSON.parse(headers['x-kin-usage'])
+      usage = JSON.parse(headers['x-usage'])
     } catch {}
   }
   return {
     usage,
-    model: headers['x-kin-model'] || null,
-    stopReason: headers['x-kin-stop-reason'] || null,
+    model: headers['x-model'] || null,
+    stopReason: headers['x-stop-reason'] || null,
   }
 }
 
@@ -239,7 +239,7 @@ function mergeUsage(current, next) {
 export function isDownstreamCommitEvent(event) {
   if (!event || typeof event !== 'object') return false
   const t = String(event.type || '')
-  if (t === 'error' || t === 'message_start' || t === 'kin_response_headers') return false
+  if (t === 'error' || t === 'message_start' || t === 'response_headers') return false
   if (t === 'message_stop' || t === 'response.completed' || t === 'response.done' || t === 'message_delta') return false
 
   if (t === 'content_block_delta') {
@@ -515,7 +515,7 @@ export async function callGoWorker({
       usage: parsed?.usage || null,
       model: parsed?.model || null,
       stopReason: parsed?.stop_reason || null,
-      terminalState: headers['x-kin-terminal-state'] || null,
+      terminalState: headers['x-terminal-state'] || null,
       transportError: false,
     })
   } catch (error) {
@@ -667,7 +667,7 @@ export async function streamGoWorker({
         body: parseJson(data),
         headers,
         committed: false,
-        terminalState: headers['x-kin-terminal-state'] || 'error',
+        terminalState: headers['x-terminal-state'] || 'error',
         transportError: false,
       })
     }
@@ -707,7 +707,7 @@ export async function streamGoWorker({
     }
     const observeSseEvent = (event) => {
       if (!event) return event
-      if (event.type === 'kin_response_headers' && event.headers && typeof event.headers === 'object') {
+      if (event.type === 'response_headers' && event.headers && typeof event.headers === 'object') {
         sseRateHeaders = { ...sseRateHeaders, ...event.headers }
       }
       if (event.type === 'error') lastError = event
@@ -739,7 +739,7 @@ export async function streamGoWorker({
     }
     try {
       // message_stop is the protocol terminal event, but the kernel still sends
-      // kin_job_done and its trailers afterward. Keep reading until the worker
+      // job_done and its trailers afterward. Keep reading until the worker
       // closes the response so a normal completion is not mistaken for cancel.
       for await (const chunk of response) {
         sawChunk = true

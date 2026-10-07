@@ -16,6 +16,7 @@ import {
 } from '../core/refusal-guard.mjs'
 import { RefusalDeviceBlocksRepo } from '../db/repos/refusal-device-blocks-repo.mjs'
 import { classifyJev, jevDocument, matchHardPolicy, policyBlockError } from './jev-intercept.mjs'
+import { gateVerdict } from './intercept-stats.mjs'
 import { prepareInterceptText } from './jev-prepare.mjs'
 
 function deviceStore(devices) {
@@ -78,8 +79,8 @@ export function commitProtocolBlock(decision, { repo, devices, policy, requestId
   }
 }
 
-function pass() {
-  return { action: 'pass' }
+function pass(by) {
+  return { action: 'pass', intercept: gateVerdict({ kind: 'pass', by }) }
 }
 
 function block(fields) {
@@ -115,6 +116,7 @@ export async function evaluateProtocolIntercept({
       final_state: 'distill_blocked',
       error: distillBlockError(distillRules, requestId),
       errorMessage: evidence ? `${distill.error?.message || '不允许蒸馏'}: ${evidence}` : distill.error?.message,
+      intercept: gateVerdict({ kind: 'block', by: 'distill', keyword: evidence.slice(0, 40) }),
       deviceId: inboundRefusalDeviceId({ inbound, body, headers }),
       fingerprint: refusalFingerprint(body, inbound),
       banDevice: true,
@@ -128,15 +130,22 @@ export async function evaluateProtocolIntercept({
     expandBase64: jev?.expand_base64 !== false,
   })
   if (jev?.hard_regex_enabled !== false) {
-    const hard = matchHardPolicy(document, jev?.patterns)
+    const hard = matchHardPolicy(document, jev?.patterns, jev?.rules)
     if (hard) {
       const error = policyBlockError(requestId)
+      const label = hard.keyword && hard.keyword !== hard.category ? `${hard.category}: ${hard.keyword}` : hard.category
       return block({
         kind: 'hard_regex',
         via: 'hard-regex',
         final_state: 'policy_blocked',
         error,
-        errorMessage: `${error.body?.error?.message}: ${hard.category}`,
+        errorMessage: `${error.body?.error?.message}: ${label}`,
+        intercept: gateVerdict({
+          kind: 'block',
+          by: 'hard-regex',
+          keyword: hard.keyword || hard.category,
+          rule: hard.evidence,
+        }),
         category: hard.category,
         deviceId: inboundRefusalDeviceId({ inbound, body, headers }),
         fingerprint: refusalFingerprint(body, inbound),
@@ -170,6 +179,7 @@ export async function evaluateProtocolIntercept({
           match.kind === 'device' ? 'refusal_device' : match.kind === 'similar' ? 'refusal_similar' : 'refusal_guard',
         error,
         errorMessage: error.body?.error?.message,
+        intercept: gateVerdict({ kind: 'block', by: 'refusal', keyword: match.kind }),
         deviceId: match.deviceId,
         fingerprint: match.fingerprint,
         banDevice: match.kind !== 'device',
@@ -189,6 +199,7 @@ export async function evaluateProtocolIntercept({
         final_state: 'policy_blocked',
         error,
         errorMessage: `${error.body?.error?.message}: ${verdict.category}`,
+        intercept: gateVerdict({ kind: 'block', by: 'jev', keyword: verdict.category }),
         category: verdict.category,
         deviceId: inboundRefusalDeviceId({ inbound, body, headers }),
         fingerprint: refusalFingerprint(body, inbound),
@@ -200,15 +211,22 @@ export async function evaluateProtocolIntercept({
         reason: `jev:${verdict.category}`,
       })
     }
+    const by =
+      verdict.reason === 'safe' || verdict.reason === 'replay'
+        ? 'jev'
+        : verdict.reason === 'skip'
+          ? 'regex'
+          : 'fail-open'
+    return pass(by)
   }
 
-  return pass()
+  return pass(jev?.hard_regex_enabled === false ? 'unchecked' : 'regex')
 }
 
-/** Block decision after side effects, or null when the request may hop. */
+/** Block decision after side effects, or the pass verdict when the request may hop. */
 export async function runProtocolIntercept(ctx = {}) {
   const decision = await evaluateProtocolIntercept(ctx)
-  if (decision.action !== 'block') return null
+  if (decision.action !== 'block') return decision
   commitProtocolBlock(decision, ctx)
   return decision
 }

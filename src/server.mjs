@@ -772,7 +772,7 @@ const importCommit = createImportCommit({
 
 const { commitImportedOauth, requireSlotProxy, officialCcStatsHandler } = importCommit
 
-const { handleProtocol } = createHandleProtocol({
+const { handleProtocol, handleSearch } = createHandleProtocol({
   json,
   writeSSEHeaders,
   readBody,
@@ -1042,6 +1042,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'POST' && (p === '/v1/messages' || p === '/messages')) {
       return await handleProtocol(req, res, 'anthropic.messages', p)
+    }
+    if (req.method === 'POST' && (p === '/v1/alpha/search' || p === '/alpha/search')) {
+      return await handleSearch(req, res, p)
     }
 
     json(res, 404, { error: { message: `not found: ${p}` } })

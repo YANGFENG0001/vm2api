@@ -14,12 +14,106 @@ import { modelsQueryOptions } from '@/features/models/queries'
 import { dashboardQueryOptions } from '@/features/overview/queries'
 import { DistillCard } from './distill-card'
 import { JevInterceptCard } from './jev-card'
+import { protocolEntryQueryOptions } from './queries'
 import { QuestionBankCard } from './question-bank-card'
 import { RefusalGuardCard } from './refusal-guard-card'
 
 function copy(text: string) {
   void navigator.clipboard.writeText(text)
   toast.success('已复制')
+}
+
+function DetailRows({
+  items,
+}: {
+  items: {
+    by: string
+    label: string
+    keyword: string
+    rule: string
+    count: number
+  }[]
+}) {
+  if (!items.length)
+    return <p className='text-sm text-muted-foreground'>没有</p>
+  return (
+    <div className='space-y-1'>
+      {items.map((item) => (
+        <div
+          key={`${item.by}:${item.keyword}:${item.rule}`}
+          className='flex items-baseline justify-between gap-3 text-sm'
+        >
+          <div className='min-w-0'>
+            <span>{item.label}</span>
+            {item.keyword ? (
+              <code className='ml-2 font-mono text-xs'>{item.keyword}</code>
+            ) : null}
+            {item.rule ? (
+              <div className='truncate font-mono text-xs text-muted-foreground'>
+                {item.rule}
+              </div>
+            ) : null}
+          </div>
+          <span className='text-muted-foreground tabular-nums'>
+            {item.count}
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function EntryStats() {
+  const q = useQuery(protocolEntryQueryOptions())
+  const blocks = q.data?.blocks || []
+  const passes = q.data?.passes || []
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>今天</CardTitle>
+      </CardHeader>
+      <CardContent className='space-y-4'>
+        {q.isLoading ? (
+          <p className='text-sm text-muted-foreground'>读取中</p>
+        ) : q.error ? (
+          <p className='text-sm text-destructive'>
+            {(q.error as Error).message}
+          </p>
+        ) : (
+          <>
+            <div className='flex gap-8'>
+              <div>
+                <div className='text-2xl font-semibold tabular-nums'>
+                  {q.data?.blocked ?? 0}
+                </div>
+                <div className='text-xs text-muted-foreground'>拦截</div>
+              </div>
+              <div>
+                <div className='text-2xl font-semibold tabular-nums'>
+                  {q.data?.passed ?? 0}
+                </div>
+                <div className='text-xs text-muted-foreground'>放行</div>
+              </div>
+            </div>
+            <div className='grid gap-4 lg:grid-cols-2'>
+              <div>
+                <div className='mb-2 text-xs text-muted-foreground'>
+                  拦截规则
+                </div>
+                <DetailRows items={blocks} />
+              </div>
+              <div>
+                <div className='mb-2 text-xs text-muted-foreground'>
+                  放行原因
+                </div>
+                <DetailRows items={passes} />
+              </div>
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  )
 }
 
 export function ProtocolPage() {
@@ -56,7 +150,8 @@ export function ProtocolPage() {
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value='entry' className='mt-4'>
+        <TabsContent value='entry' className='mt-4 space-y-4'>
+          <EntryStats />
           <QueryGate
             loading={dash.isLoading || models.isLoading}
             error={dash.error || models.error}

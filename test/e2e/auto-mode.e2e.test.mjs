@@ -24,7 +24,7 @@ function unixRequest(socketPath, token, endpoint, payload) {
         socketPath,
         path: endpoint,
         method: payload ? 'POST' : 'GET',
-        headers: { 'x-kin-internal-token': token, 'content-type': 'application/json' },
+        headers: { 'x-internal-token': token, 'content-type': 'application/json' },
         timeout: 10000,
       },
       (res) => {

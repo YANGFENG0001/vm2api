@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { JevInterceptConfig } from '@/types/panel-routing'
+import type { JevInterceptConfig, PolicyRule } from '@/types/panel-routing'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -33,6 +33,26 @@ function linesOf(text: string) {
     .split('\n')
     .map((s) => s.trim())
     .filter(Boolean)
+}
+
+const RULE_LABELS: Record<string, string> = {
+  nsfw: '色情',
+  distill: '蒸馏',
+  crack: '破解',
+  jailbreak: '破限',
+  custom: '自定义',
+}
+
+function ruleKey(rules: PolicyRule[] = []) {
+  return JSON.stringify(
+    rules
+      .filter((rule) => rule.source.trim())
+      .map((rule) => ({
+        category: rule.category || 'custom',
+        source: rule.source.trim(),
+        enabled: rule.enabled !== false,
+      }))
+  )
 }
 
 export function JevInterceptCard() {
@@ -73,6 +93,11 @@ export function JevInterceptCard() {
         expand_base64: draft.expand_base64 !== false,
         strip_reminders: draft.strip_reminders !== false,
         patterns: linesOf(patternsText),
+      }
+      const builtin = q.data?.builtin_rules || []
+      const current = (draft.rules || []).filter((rule) => rule.source.trim())
+      if (q.data?.rules_customized || ruleKey(current) !== ruleKey(builtin)) {
+        body.rules = ruleKey(current) === ruleKey(builtin) ? null : current
       }
       const keys = linesOf(keysText).slice(0, 8)
       if (clearKey) body.api_keys = []
@@ -158,6 +183,7 @@ export function JevInterceptCard() {
     (draft.expand_base64 !== false) !== (q.data?.expand_base64 !== false) ||
     (draft.strip_reminders !== false) !== (q.data?.strip_reminders !== false) ||
     linesOf(patternsText).join('\n') !== (q.data?.patterns || []).join('\n') ||
+    ruleKey(draft.rules) !== ruleKey(q.data?.rules) ||
     apiKey.trim().length > 0 ||
     linesOf(keysText).length > 0 ||
     clearKey
@@ -229,7 +255,6 @@ export function JevInterceptCard() {
     })
   }
   const customCount = linesOf(patternsText).length
-  const builtinCount = (draft.builtin_patterns || []).length
 
   return (
     <Card>
@@ -545,13 +570,94 @@ export function JevInterceptCard() {
           hint={`类别：${(draft.categories || []).join('、') || 'nsfw、distill、crack、jailbreak'}`}
         >
           <FoldStack>
-            <Fold flush title='内置硬正则' meta={`${builtinCount} 条，不能删`}>
-              <Textarea
-                readOnly
-                rows={8}
-                className='font-mono text-xs'
-                value={(draft.builtin_patterns || []).join('\n')}
-              />
+            <Fold
+              flush
+              title='硬正则'
+              meta={`${(draft.rules || []).filter((rule) => rule.enabled !== false).length} 条启用`}
+            >
+              <div className='space-y-2'>
+                {(draft.rules || []).map((rule, index) => (
+                  <div key={index} className='flex items-center gap-2'>
+                    <Switch
+                      checked={rule.enabled !== false}
+                      onCheckedChange={(enabled) => {
+                        const rules = [...(draft.rules || [])]
+                        rules[index] = { ...rule, enabled }
+                        setDraft({ ...draft, rules })
+                      }}
+                      aria-label='启用这条规则'
+                    />
+                    <select
+                      className='h-8 rounded-md border bg-background px-2 text-xs'
+                      value={rule.category || 'custom'}
+                      onChange={(e) => {
+                        const rules = [...(draft.rules || [])]
+                        rules[index] = { ...rule, category: e.target.value }
+                        setDraft({ ...draft, rules })
+                      }}
+                    >
+                      {Object.entries(RULE_LABELS).map(([id, label]) => (
+                        <option key={id} value={id}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                    <Input
+                      className='font-mono text-xs'
+                      value={rule.source}
+                      onChange={(e) => {
+                        const rules = [...(draft.rules || [])]
+                        rules[index] = { ...rule, source: e.target.value }
+                        setDraft({ ...draft, rules })
+                      }}
+                    />
+                    <Button
+                      type='button'
+                      size='sm'
+                      variant='ghost'
+                      className='cursor-pointer'
+                      onClick={() => {
+                        const rules = (draft.rules || []).filter(
+                          (_, item) => item !== index
+                        )
+                        setDraft({ ...draft, rules })
+                      }}
+                    >
+                      删除
+                    </Button>
+                  </div>
+                ))}
+                <div className='flex gap-2'>
+                  <Button
+                    type='button'
+                    size='sm'
+                    variant='outline'
+                    className='cursor-pointer'
+                    onClick={() =>
+                      setDraft({
+                        ...draft,
+                        rules: [
+                          ...(draft.rules || []),
+                          { category: 'custom', source: '', enabled: true },
+                        ],
+                      })
+                    }
+                  >
+                    加一条
+                  </Button>
+                  <Button
+                    type='button'
+                    size='sm'
+                    variant='outline'
+                    className='cursor-pointer'
+                    onClick={() =>
+                      setDraft({ ...draft, rules: q.data?.builtin_rules || [] })
+                    }
+                  >
+                    恢复内置
+                  </Button>
+                </div>
+              </div>
             </Fold>
             <Fold
               flush

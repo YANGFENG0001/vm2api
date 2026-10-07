@@ -20,6 +20,7 @@ import {
 import { cacheHitStats } from '../../admin/cache-metrics.mjs'
 import { extraWindowSince, WINDOW_5H_MS, WINDOW_7D_MS } from '../../pool/quota-window.mjs'
 import { ERROR_PRED, SUCCESS_PRED, SLA_ERROR_PRED, SLA_SUCCESS_PRED, ownerPred } from './usage-log-preds.mjs'
+import { collapseBlockKeywords, foldInterceptRows } from '../../protocol/intercept-stats.mjs'
 
 const SUMMARY_COLUMNS = [
   'id',
@@ -75,6 +76,7 @@ const SUMMARY_COLUMNS = [
   'session_id',
   'outbound_session_id',
   'reasoning_effort',
+  'intercept',
 ]
 
 function toRow(rec) {
@@ -719,6 +721,68 @@ export class UsageLogsRepo {
       history,
       models: group("COALESCE(NULLIF(upstream_model, ''), NULLIF(model, ''), NULLIF(requested_model, ''), '—')", 12),
       endpoints: group("COALESCE(NULLIF(path, ''), '—')", 8),
+    }
+  }
+
+  /** Shanghai-day protocol gate: blocks, passes, and the words that blocked. */
+  protocolEntryStats({ since = shanghaiDayStartIso() } = {}) {
+    const block = `(
+      error_code = 'policy_blocked'
+      OR via IN ('hard-regex', 'jev', 'distill-detect', 'refusal-guard')
+      OR final_state IN ('policy_blocked', 'distill_blocked', 'refusal_guard', 'refusal_similar', 'refusal_device')
+    )`
+    const row = this.db
+      .prepare(
+        `SELECT
+           SUM(CASE WHEN ${block} THEN 1 ELSE 0 END) AS blocked,
+           SUM(CASE WHEN path IN ('/v1/messages', '/v1/responses', '/v1/chat/completions')
+                     AND NOT ${block}
+                     AND COALESCE(via, '') != 'warmup-intercept'
+                THEN 1 ELSE 0 END) AS passed
+         FROM usage_logs
+         WHERE created_at >= ?`,
+      )
+      .get(since)
+    const keywords = this.db
+      .prepare(
+        `SELECT error_message AS message, COUNT(*) AS count
+         FROM usage_logs
+         WHERE created_at >= ?
+           AND ${block}
+           AND error_message IS NOT NULL
+           AND error_message != ''
+         GROUP BY error_message
+         ORDER BY count DESC
+         LIMIT 50`,
+      )
+      .all(since)
+    const grouped = this.db
+      .prepare(
+        `SELECT intercept, via, error_message AS message,
+                CASE WHEN ${block} THEN 1 ELSE 0 END AS blocked,
+                COUNT(*) AS count
+         FROM usage_logs
+         WHERE created_at >= ?
+           AND (
+             (intercept IS NOT NULL AND intercept != '')
+             OR ${block}
+             OR (
+               path IN ('/v1/messages', '/v1/responses', '/v1/chat/completions')
+               AND NOT ${block}
+               AND COALESCE(via, '') != 'warmup-intercept'
+             )
+           )
+         GROUP BY intercept, via, error_message, blocked`,
+      )
+      .all(since)
+    const folded = foldInterceptRows(grouped)
+    return {
+      since,
+      blocked: Number(row?.blocked || 0),
+      passed: Number(row?.passed || 0),
+      keywords: collapseBlockKeywords(keywords),
+      blocks: folded.blocks,
+      passes: folded.passes,
     }
   }
 

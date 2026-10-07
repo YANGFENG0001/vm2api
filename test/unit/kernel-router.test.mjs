@@ -201,12 +201,12 @@ unixTest('dispatchStreamInference uses rust socket when ready', async () => {
   const prev = process.env.KIN_KERNEL_BIN
   process.env.KIN_KERNEL_BIN = '/bin/true'
   const fx = await kernelFixture((req, res) => {
-    assert.equal(req.headers['x-kin-internal-token'], 'internal-test')
+    assert.equal(req.headers['x-internal-token'], 'internal-test')
     res.writeHead(200, {
       'content-type': 'text/event-stream',
-      trailer: 'x-kin-usage, x-kin-stop-reason',
-      'x-kin-terminal-state': 'verified',
-      'x-kin-model': 'claude-haiku-4-5-20251001',
+      trailer: 'x-usage, x-stop-reason',
+      'x-terminal-state': 'verified',
+      'x-model': 'claude-haiku-4-5-20251001',
     })
     res.write('event: message_start\n')
     res.write('data: {"type":"message_start","message":{"type":"message","role":"assistant","content":[]}}\n\n')
@@ -215,14 +215,14 @@ unixTest('dispatchStreamInference uses rust socket when ready', async () => {
     res.write('event: message_stop\n')
     res.write('data: {"type":"message_stop"}\n\n')
     res.addTrailers({
-      'x-kin-usage': JSON.stringify({
+      'x-usage': JSON.stringify({
         input_tokens: 12,
         output_tokens: 4,
         cache_read_input_tokens: 3,
         cache_creation_input_tokens: 5,
         cache_creation: { ephemeral_5m_input_tokens: 2, ephemeral_1h_input_tokens: 3 },
       }),
-      'x-kin-stop-reason': 'end_turn',
+      'x-stop-reason': 'end_turn',
     })
     res.end()
   })
@@ -272,7 +272,7 @@ unixTest('needs_refresh retries once via Go ensure', async () => {
       )
       return
     }
-    res.writeHead(200, { 'content-type': 'application/json', 'x-kin-terminal-state': 'verified' })
+    res.writeHead(200, { 'content-type': 'application/json', 'x-terminal-state': 'verified' })
     res.end(JSON.stringify({ type: 'message', role: 'assistant', content: [] }))
   })
   try {
@@ -357,7 +357,7 @@ unixTest('unhealthy rust does not fall back to go', async () => {
   const server = http.createServer((_req, res) => {
     res.writeHead(200, {
       'content-type': 'text/event-stream',
-      'x-kin-terminal-state': 'verified',
+      'x-terminal-state': 'verified',
     })
     res.write('event: message_stop\n')
     res.write('data: {"type":"message_stop"}\n\n')
