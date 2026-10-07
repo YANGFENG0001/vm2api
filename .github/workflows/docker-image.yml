@@ -29,10 +29,28 @@
 #       一键更新就会从你的 fork 拉镜像 —— 版本发现用上游、镜像拉取用你自己的。
 #
 # 为什么不能靠「读自己仓库的 VERSION 再构建」？
-#   上游发版极快（v1.3.110 → v1.3.115 只用了 18 小时，约 1~2 小时一版）。
-#   自己构建永远慢一两版：面板说最新是 v1.3.115，你仓库只有 v1.3.114，
+#   上游发版极快（v1.3.110 → v1.3.118 只用了 5 小时，约 1 小时一版）。
+#   自己构建永远慢一两版：面板说最新是 v1.3.118，你仓库只有 v1.3.114，
 #   docker compose pull 直接报 manifest unknown → 一键更新失败。
 #   直接复制上游已发布的镜像可以做到标签零偏差，而且几秒钟完成、不会构建失败。
+#
+# ===========================================================================
+# ⚠️ 关键坑：上游「发 release」和「镜像可拉」之间有一个空窗
+# ===========================================================================
+# 上游 release.yml 的流程是：推 vX.Y.Z tag → 构建 amd64 → 构建 arm64 →
+# 合成 manifest。而 GitHub Release（releases/latest 能查到的那个）在**构建之前**
+# 就创建好了。所以存在几十分钟的窗口：面板已经显示 vX.Y.Z，
+# 但 ghcr.io/dofastted/vm2api:vX.Y.Z 还不存在。
+#
+# 2026-10-07 12:00 就踩了这个坑：上游 12:00:19 发 v1.3.118，本工作流 12:00:43
+# 跑起来，去拉上游镜像直接 404 → mirror 步骤 `exit 1` → 整个 run 变红。
+#
+# 处理方式（本文件已实现）：
+#   1. plan 阶段先探测上游镜像是否真的存在，没就绪的版本记为 pending，
+#      **不**排进 mirror 矩阵 —— 从源头避免失败；
+#   2. mirror 阶段再加一道保险：上游 bare tag 不存在就只发 warning 后正常退出；
+#   3. retag-latest 不再死盯「上游最新版」，而是从新到旧挑第一个本 fork
+#      **确实存在**的版本指向 :latest，避免 :latest 卡在旧版本。
 #
 # ===========================================================================
 # 标签方案（与上游 release.yml 完全一致）
@@ -42,37 +60,38 @@
 #   manifest → ghcr.io/<owner>/vm2api:vX.Y.Z   以及   ghcr.io/<owner>/vm2api:latest
 #
 # 触发时机：
-#   · main / mirror-trigger 分支的 push。主力是家宽机 108 上的 systemd timer：
-#     每 5 分钟查一次 fork GHCR 是否缺上游最新 tag，缺就往 mirror-trigger 推空提交。
-#   · sync-upstream 跑完自动跟一次（workflow_run）
+#   · 每 10 分钟（错开 5 分，和 sync-upstream 的 */10 交错）轮询上游 releases
+#   · sync-upstream 每次跑完就跟着跑（workflow_run）
 #   · 手动 workflow_dispatch（可指定版本 / 一次性补齐最近 N 版）
-#
-# ⚠️ 为什么不能只靠 schedule：
-#   GitHub 对 fork 仓库不运行 schedule 事件。实测本 fork 建立 20 小时、
-#   同时挂了 */10 和 */15 两个 cron，跨过多个 cron 边界仍为 0 次运行，
-#   用 API disable→enable 重注册后依旧 0 次。所以必须有一个仓库外部的触发器。
+#   · 本文件自身被修改
+#   仓库是 public，Actions 分钟数不计费，所以轮询频率可以放开，
+#   把「面板显示有新版本」到「镜像可拉取」的窗口压到 5 分钟左右。
 #
 # 前置条件：
 #   1. 仓库 Settings → Actions → General → Workflow permissions
 #      选择「Read and write permissions」（否则 GITHUB_TOKEN 推不了包）
 #   2. 仓库 Packages 页面把 vm2api 包设为 Public
 #      （私有包在 VPS 上 docker compose pull 会 401；或者你改成 docker login ghcr.io）
+#
+# 注意：本工作流**不要**去推 git tag。
+#   上游自带的 release.yml 触发条件是 `on: push: tags: ['v*']`，
+#   往 fork 推 vX.Y.Z tag 会给每个 tag 排一整套多架构构建（40~60 分钟）。
+#   镜像由本文件直接镜像上游，完全不需要 git tag。
 # ===========================================================================
 name: docker-image
 
 on:
   schedule:
-    # 上游发版快，15 分钟一次能把「面板显示有新版本」到「镜像可拉取」的窗口压到最小
-    - cron: '*/15 * * * *'
+    # 上游发版快（约 1 小时一版），10 分钟一轮把延迟压到 5 分钟左右
+    - cron: '5,15,25,35,45,55 * * * *'
   workflow_run:
     # sync-upstream 每次跑完都跟一次，天然复用它的 10 分钟心跳
     workflows: ["sync-upstream"]
     types: [completed]
   push:
-    # main 分支的任何推送（上游合并、工作流改动）都顺带对齐一次镜像；
-    # mirror-trigger 是家宽机守护进程在发现 fork GHCR 缺上游新版本时推的空提交分支。
-    # GitHub 对 fork 仓库不运行 schedule 事件，所以必须有一个外部触发器。
-    branches: [main, mirror-trigger]
+    branches: [main]
+    paths:
+      - '.github/workflows/docker-image.yml'
   workflow_dispatch:
     inputs:
       tag:
@@ -81,7 +100,7 @@ on:
         required: false
         default: ''
       count:
-        description: '同时补齐最近 N 个版本（默认 3，用于补历史标签）'
+        description: '同时检查最近 N 个版本（默认 3，用于补历史标签）'
         type: string
         required: false
         default: '3'
@@ -104,20 +123,29 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # plan：解析上游最新版本 + 最近几个版本，并检查本 fork 缺哪些标签。
-  #       不 checkout —— 全部走 API，避免为几个字节去拉 400MB+ 的仓库。
+  # plan：解析上游版本列表，并分别探测「上游有没有镜像」「本 fork 有没有镜像」。
+  #       不 checkout —— 全部走 API + registry，避免为几个字节去拉 400MB+ 的仓库。
   # ---------------------------------------------------------------------------
   plan:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       image: ${{ steps.resolve.outputs.image }}
       latest: ${{ steps.resolve.outputs.latest }}
+      candidates: ${{ steps.resolve.outputs.candidates }}
       missing: ${{ steps.probe.outputs.missing }}
       has_missing: ${{ steps.probe.outputs.has_missing }}
+      pending: ${{ steps.probe.outputs.pending }}
     steps:
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Resolve upstream release tags
         id: resolve
@@ -165,51 +193,75 @@ jobs:
             exit 1
           fi
           echo "latest=${latest}" >> "${GITHUB_OUTPUT}"
-          {
-            echo "### docker-image"
-            echo ""
-            echo "- 上游最新版本：\`${latest}\`"
-            echo "- 本轮检查：$(paste -sd' ' "${list}")"
-          } >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          node -e '
+            const fs = require("fs");
+            const arr = fs.readFileSync(process.argv[1], "utf8").split("\n").map((s) => s.trim()).filter(Boolean);
+            process.stdout.write("candidates=" + JSON.stringify(arr) + "\n");
+          ' "${list}" >> "${GITHUB_OUTPUT}"
 
-      - name: Probe which tags are missing
+          echo "上游最新版本：${latest}"
+
+      - name: Probe upstream and fork availability
         id: probe
         shell: bash
         run: |
           set -euo pipefail
           image="${{ steps.resolve.outputs.image }}"
-          missing=()
+          src="ghcr.io/${UPSTREAM_REPO}"
+
+          up_file="${RUNNER_TEMP}/upstream_ready.txt"
+          miss_file="${RUNNER_TEMP}/missing.txt"
+          pend_file="${RUNNER_TEMP}/pending.txt"
+          : > "${up_file}"; : > "${miss_file}"; : > "${pend_file}"
+
           while IFS= read -r tag; do
             [ -z "${tag}" ] && continue
+            # 1) 上游镜像真的存在吗？（release 已发 ≠ 镜像已推完）
+            if ! docker buildx imagetools inspect "${src}:${tag}" >/dev/null 2>&1; then
+              echo "⏳ ${src}:${tag} 上游镜像尚未就绪（release 已发、构建未完成），本轮跳过"
+              printf '%s\n' "${tag}" >> "${pend_file}"
+              continue
+            fi
+            printf '%s\n' "${tag}" >> "${up_file}"
+            # 2) 本 fork 有没有？
             if docker buildx imagetools inspect "${image}:${tag}" >/dev/null 2>&1; then
               echo "✓ 已有 ${image}:${tag}"
             else
               echo "✗ 缺失 ${image}:${tag}"
-              missing+=("${tag}")
+              printf '%s\n' "${tag}" >> "${miss_file}"
             fi
           done < "${RUNNER_TEMP}/candidates.txt"
 
-          if [ "${#missing[@]}" -eq 0 ]; then
-            echo 'missing=[]' >> "${GITHUB_OUTPUT}"
-            echo 'has_missing=false' >> "${GITHUB_OUTPUT}"
-            echo "本 fork 已与上游对齐，无需同步。"
-          else
-            json="$(printf '%s\n' "${missing[@]}" | node -e '
+          to_json() {
+            node -e '
               const fs = require("fs");
-              const arr = fs.readFileSync(0, "utf8").split("\n").map((s) => s.trim()).filter(Boolean);
+              const arr = fs.readFileSync(process.argv[1], "utf8").split("\n").map((s) => s.trim()).filter(Boolean);
               process.stdout.write(JSON.stringify(arr));
-            ')"
-            echo "missing=${json}" >> "${GITHUB_OUTPUT}"
+            ' "$1"
+          }
+
+          missing_json="$(to_json "${miss_file}")"
+          pending_json="$(to_json "${pend_file}")"
+          echo "missing=${missing_json}" >> "${GITHUB_OUTPUT}"
+          echo "pending=${pending_json}" >> "${GITHUB_OUTPUT}"
+          if [ "${missing_json}" = "[]" ]; then
+            echo 'has_missing=false' >> "${GITHUB_OUTPUT}"
+            echo "本 fork 已与上游可用版本对齐，无需同步。"
+          else
             echo 'has_missing=true' >> "${GITHUB_OUTPUT}"
-            echo "需要补齐：${missing[*]}"
+            echo "需要补齐：${missing_json}"
           fi
+
+          {
+            echo "### docker-image"
+            echo ""
+            echo "- 上游最新 release：\`${{ steps.resolve.outputs.latest }}\`"
+            echo "- 本 fork 缺失：\`${missing_json}\`"
+            if [ "${pending_json}" != "[]" ]; then
+              echo "- ⏳ 上游镜像尚未就绪（下一轮自动补）：\`${pending_json}\`"
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
 
   # ---------------------------------------------------------------------------
   # mirror：把上游的 vX.Y.Z / vX.Y.Z-amd64 / vX.Y.Z-arm64 复制到本 fork 的 GHCR。
@@ -220,18 +272,18 @@ jobs:
   mirror:
     needs: plan
     if: needs.plan.outputs.has_missing == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         tag: ${{ fromJSON(needs.plan.outputs.missing) }}
     steps:
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -245,55 +297,160 @@ jobs:
         run: |
           set -euo pipefail
           src="ghcr.io/${UPSTREAM_REPO}"
+
+          # 保险丝：上游 release 已发布 ≠ 镜像已推完。
+          # 没就绪就安静跳过（下一轮自动补），绝不让整条流水线变红。
+          if ! docker buildx imagetools inspect "${src}:${TAG}" >/dev/null 2>&1; then
+            echo "::warning::上游 ${src}:${TAG} 镜像尚未就绪，本轮跳过，下一轮会自动补上"
+            exit 0
+          fi
+
+          # GHCR 偶尔抽风，复制失败先重试 3 次再判定
+          copy_ref() {
+            local ref="$1" attempt=1
+            while [ "${attempt}" -le 3 ]; do
+              if docker buildx imagetools create -t "${IMAGE}:${ref}" "${src}:${ref}"; then
+                return 0
+              fi
+              echo "  第 ${attempt} 次复制 ${ref} 失败，5 秒后重试…"
+              attempt=$((attempt + 1))
+              sleep 5
+            done
+            return 1
+          }
+
           copied=0
+          failed=''
           for suffix in '' '-amd64' '-arm64'; do
             ref="${TAG}${suffix}"
             if ! docker buildx imagetools inspect "${src}:${ref}" >/dev/null 2>&1; then
-              echo "上游没有 ${src}:${ref}，跳过"
+              echo "· 上游没有 ${src}:${ref}，跳过"
               continue
             fi
-            docker buildx imagetools create -t "${IMAGE}:${ref}" "${src}:${ref}"
-            echo "✓ ${IMAGE}:${ref}"
-            copied=$((copied + 1))
+            if copy_ref "${ref}"; then
+              echo "✓ ${IMAGE}:${ref}"
+              copied=$((copied + 1))
+            else
+              echo "✗ ${IMAGE}:${ref} 复制失败"
+              failed="${failed} ${ref}"
+            fi
           done
+
+          # 上游有、我们复制失败 → bare tag 是 install.sh 升级时真正拉的那个，必须红；
+          # 只有 -amd64/-arm64 变体失败则记 warning（下一轮会补）
+          case " ${failed} " in
+            *" ${TAG} "*)
+              echo "::error::${src}:${TAG} 复制失败（重试 3 次），请检查 packages: write 权限"
+              exit 1
+              ;;
+          esac
+          if [ -n "${failed}" ]; then
+            echo "::warning::以下架构变体复制失败，下一轮会重试：${failed}"
+          fi
+
           if [ "${copied}" -eq 0 ]; then
-            echo "::error::上游 ${src}:${TAG} 不存在，无法同步"
-            exit 1
+            echo "::warning::${src}:${TAG} 一个标签都没复制成功，本轮跳过"
+            exit 0
+          fi
+
+          # 体检：bare tag 是否为多架构 manifest list（arm64 机器 install.sh 会拉 -arm64）。
+          # 纯检查，读不到就跳过 —— 不能因为 registry 抖动把整条流水线搞红。
+          raw_json="$(docker buildx imagetools inspect --raw "${IMAGE}:${TAG}" 2>/dev/null || true)"
+          if [ -z "${raw_json}" ]; then
+            echo "· 读不到 ${IMAGE}:${TAG} 的 manifest，跳过平台校验"
+          else
+            printf '%s' "${raw_json}" | node -e '
+              const fs = require("fs");
+              let raw = {};
+              try { raw = JSON.parse(fs.readFileSync(0, "utf8")); } catch { raw = {}; }
+              const found = new Set(
+                (raw.manifests || []).map((m) => (m.platform || {}).architecture).filter(Boolean)
+              );
+              const target = process.env.IMAGE + ":" + process.env.TAG;
+              if (!found.size) {
+                console.log("· " + target + " 是单架构镜像（非 manifest list），跳过平台校验");
+                process.exit(0);
+              }
+              const lack = ["amd64", "arm64"].filter((a) => !found.has(a));
+              if (lack.length) {
+                console.log("::warning::" + target + " 缺少平台：" + lack.join(", "));
+              } else {
+                console.log("✓ " + target + " 平台：" + [...found].sort().join(", "));
+              }
+            '
           fi
 
   # ---------------------------------------------------------------------------
-  # retag-latest：把本 fork 的 :latest 指到上游最新版本。
-  #               （mirror 被跳过时也要跑，保证 latest 不会停留在旧版本）
+  # retag-latest：把本 fork 的 :latest 指向「本 fork 确实存在的最新版本」。
+  #               注意不是「上游最新版本」—— mirror 可能因为上游镜像未就绪而
+  #               跳过最新那版，此时应该退到次新版本，而不是让 :latest 卡住不动。
   # ---------------------------------------------------------------------------
   retag-latest:
     needs: [plan, mirror]
-    if: always() && needs.plan.result == 'success' && needs.plan.outputs.latest != ''
-    runs-on: ubuntu-latest
+    if: always() && needs.plan.result == 'success' && needs.plan.outputs.candidates != ''
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Point :latest at ${{ needs.plan.outputs.latest }}
+      - name: Point :latest at the newest version this fork actually has
         shell: bash
         env:
           IMAGE: ${{ needs.plan.outputs.image }}
-          TAG: ${{ needs.plan.outputs.latest }}
+          CANDIDATES: ${{ needs.plan.outputs.candidates }}
         run: |
           set -euo pipefail
-          if ! docker buildx imagetools inspect "${IMAGE}:${TAG}" >/dev/null 2>&1; then
-            echo "::warning::${IMAGE}:${TAG} 还不存在（mirror 未完成），跳过 latest 更新，下一轮会补上"
+          order="${RUNNER_TEMP}/order.txt"
+          printf '%s' "${CANDIDATES}" | node -e '
+            const fs = require("fs");
+            let a = [];
+            try { a = JSON.parse(fs.readFileSync(0, "utf8") || "[]"); } catch { a = []; }
+            if (Array.isArray(a) && a.length) process.stdout.write(a.join("\n") + "\n");
+          ' > "${order}"
+
+          chosen=''
+          while IFS= read -r tag; do
+            [ -z "${tag}" ] && continue
+            if docker buildx imagetools inspect "${IMAGE}:${tag}" >/dev/null 2>&1; then
+              chosen="${tag}"
+              break
+            fi
+          done < "${order}"
+
+          if [ -z "${chosen}" ]; then
+            echo "::warning::本 fork 还没有任何候选版本标签，跳过 :latest 更新"
             exit 0
           fi
-          docker buildx imagetools create -t "${IMAGE}:latest" "${IMAGE}:${TAG}"
-          echo "✓ ${IMAGE}:latest → ${TAG}"
+
+          attempt=1
+          ok=false
+          while [ "${attempt}" -le 3 ]; do
+            if docker buildx imagetools create -t "${IMAGE}:latest" "${IMAGE}:${chosen}"; then
+              ok=true
+              break
+            fi
+            echo "  第 ${attempt} 次更新 :latest 失败，5 秒后重试…"
+            attempt=$((attempt + 1))
+            sleep 5
+          done
+          if [ "${ok}" != "true" ]; then
+            echo "::warning::更新 ${IMAGE}:latest 失败（已重试 3 次），下一轮会自动补上"
+            exit 0
+          fi
+
+          echo "✓ ${IMAGE}:latest → ${chosen}"
+          {
+            echo ""
+            echo "- \`:latest\` → \`${chosen}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
 
   # ---------------------------------------------------------------------------
   # 以下是可选的「自己构建」路径，只在手动 Run workflow 且勾选 build=true 时执行。
@@ -303,7 +460,7 @@ jobs:
   build-meta:
     needs: plan
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.build == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       version: ${{ steps.v.outputs.version }}
@@ -324,24 +481,24 @@ jobs:
   build-amd64:
     needs: [plan, build-meta]
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.build == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push (amd64)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile
@@ -361,20 +518,20 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push (arm64)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: deploy/Dockerfile.arm64-control
@@ -388,14 +545,14 @@ jobs:
   build-manifest:
     needs: [plan, build-meta, build-amd64, build-arm64]
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.build == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
