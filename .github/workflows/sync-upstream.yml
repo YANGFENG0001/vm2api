@@ -10,10 +10,19 @@
 #   没变化时：只跑「Detect upstream changes」一步，约 10 秒结束，不拉仓库。
 #   有变化时：才 checkout（本仓库约 438MB，全量 clone 较慢）+ 合并 + 推送。
 #
-# 注意：GitHub 的 cron 不是精确时刻，高峰期可能延迟数分钟到数十分钟，
-#       所以「每 10 分钟」实际大约是 10~30 分钟内生效。
-#       另外，仓库连续 60 天无活动时 GitHub 会自动停用定时工作流，
-#       上游长期不更新的话需要手动去 Actions 页面重新启用。
+# ⚠️⚠️ 实测：GitHub 对 fork 仓库**不运行 schedule 事件**。
+#   本 fork 建立 20 小时、挂着 */10 的 cron，跨过几十个 cron 边界，
+#   本工作流的运行次数始终是 1 —— 而且那 1 次是手动 workflow_dispatch。
+#   用 API disable→enable 重新注册后依旧为 0。docker-image.yml 那边也一样。
+#   所以「轮询」不能靠 cron，必须有一个**仓库外部**的触发器。
+#
+#   现成的触发器：家宽机 108 上的 systemd timer 会往 `mirror-trigger` 分支
+#   推空提交（它本来是为 docker-image 准备的）。这里直接复用：
+#   push 到 mirror-trigger 时也跑一次同步，用户侧不需要改任何东西。
+#   于是每 5 分钟一次外部心跳同时驱动「同步上游」+「搬运镜像」。
+#
+#   注意：GitHub 的 cron 不是精确时刻，高峰期可能延迟数分钟到数十分钟；
+#   另外仓库连续 60 天无活动时 GitHub 会自动停用定时工作流。
 # ---------------------------------------------------------------------------
 #
 # ⚠️ 强烈建议配置一个 PAT 放进仓库 Secret `SYNC_TOKEN`。
@@ -41,8 +50,14 @@ name: sync-upstream
 
 on:
   schedule:
-    # 每 10 分钟检测一次上游是否领先本 fork
+    # 每 10 分钟检测一次上游是否领先本 fork。
+    # ⚠️ 本 fork 上实测不触发（见头部说明），真正干活的是下面 push 里的
+    #    mirror-trigger —— 家宽机 108 的 systemd timer 推空提交来驱动。
     - cron: '*/10 * * * *'
+  push:
+    # 家宽机 108 的 systemd timer 每 5 分钟推一次空提交（发现 fork GHCR 缺
+    # 上游最新 tag 时）。复用它当同步心跳，用户侧不需要改任何东西。
+    branches: [mirror-trigger]
   workflow_dispatch:
     inputs:
       upstream_branch:
@@ -67,7 +82,7 @@ env:
 
 jobs:
   sync:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Warn when SYNC_TOKEN is missing
@@ -117,7 +132,7 @@ jobs:
 
       - name: Checkout fork main
         if: steps.detect.outputs.changed == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 0

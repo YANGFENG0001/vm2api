@@ -60,12 +60,18 @@
 #   manifest → ghcr.io/<owner>/vm2api:vX.Y.Z   以及   ghcr.io/<owner>/vm2api:latest
 #
 # 触发时机：
-#   · 每 10 分钟（错开 5 分，和 sync-upstream 的 */10 交错）轮询上游 releases
+#   · main / mirror-trigger 分支的 push。**主力是家宽机 108 上的 systemd timer**：
+#     每 5 分钟查一次 fork GHCR 是否缺上游最新 tag，缺就往 mirror-trigger 推空提交。
 #   · sync-upstream 每次跑完就跟着跑（workflow_run）
 #   · 手动 workflow_dispatch（可指定版本 / 一次性补齐最近 N 版）
-#   · 本文件自身被修改
-#   仓库是 public，Actions 分钟数不计费，所以轮询频率可以放开，
-#   把「面板显示有新版本」到「镜像可拉取」的窗口压到 5 分钟左右。
+#   · schedule 也挂着，但见下面的警告 —— 在本 fork 上不会触发。
+#
+# ⚠️ 为什么不能只靠 schedule：
+#   GitHub 对 fork 仓库不运行 schedule 事件。实测本 fork 建立 20 小时、
+#   同时挂了 */10 和 */15 两个 cron，跨过多个 cron 边界仍为 0 次运行，
+#   用 API disable→enable 重注册后依旧 0 次（sync-upstream 同样只有 1 次
+#   workflow_dispatch 运行，schedule 一次都没跑过）。
+#   所以镜像对齐必须依赖仓库外部的触发器，cron 只作为兜底保留。
 #
 # 前置条件：
 #   1. 仓库 Settings → Actions → General → Workflow permissions
@@ -82,16 +88,19 @@ name: docker-image
 
 on:
   schedule:
-    # 上游发版快（约 1 小时一版），10 分钟一轮把延迟压到 5 分钟左右
+    # 上游发版快（约 1 小时一版）。注意：本 fork 上 schedule 实测不触发，
+    # 真正干活的是 mirror-trigger 的外部 timer，这里只作兜底。
     - cron: '5,15,25,35,45,55 * * * *'
   workflow_run:
-    # sync-upstream 每次跑完都跟一次，天然复用它的 10 分钟心跳
+    # sync-upstream 每次跑完都跟一次
     workflows: ["sync-upstream"]
     types: [completed]
   push:
-    branches: [main]
-    paths:
-      - '.github/workflows/docker-image.yml'
+    # main 分支的任何推送（上游合并、工作流改动）都顺带对齐一次镜像；
+    # mirror-trigger 是家宽机守护进程在发现 fork GHCR 缺上游新版本时推的空提交分支。
+    # 这里刻意不加 paths 过滤 —— 上游合并也会改到 .github/workflows/ 下的文件，
+    # 加过滤反而漏触发。
+    branches: [main, mirror-trigger]
   workflow_dispatch:
     inputs:
       tag:
