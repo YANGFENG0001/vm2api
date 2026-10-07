@@ -72,7 +72,7 @@ export function inferTierFromOfficialStats(text = '', structured = {}) {
 
 /**
  * `claude /usage --print --output-format stream-json` prints one JSON event
- * per line. 2.1.284 puts the GET /api/oauth/usage body in the result event.
+ * per line. 2.1.293 puts the GET /api/oauth/usage body in the result event.
  * Older builds put server limits[] on a synthetic assistant `usage_report`.
  */
 export function officialUsageEvents(raw) {

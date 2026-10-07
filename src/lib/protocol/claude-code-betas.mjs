@@ -55,8 +55,13 @@ export function fullClaudeCodeMimicryBetas() {
 
 export const DEFAULT_BETA_HEADER = fullClaudeCodeMimicryBetas().join(',')
 
+function isLegacyHaiku(modelId = '') {
+  const id = String(modelId || '')
+  return /haiku/i.test(id) && !/haiku-5/i.test(id)
+}
+
 export function defaultOfficialBetaHeader(modelId = '') {
-  return /haiku/i.test(String(modelId || '')) ? HAIKU_BETA_HEADER : DEFAULT_BETA_HEADER
+  return isLegacyHaiku(modelId) ? HAIKU_BETA_HEADER : DEFAULT_BETA_HEADER
 }
 
 export function joinBetas(tokens = []) {
@@ -80,7 +85,7 @@ export function apiKeyBetaHeader(header = '') {
 
 /** Setup Token runtime uses the inference-compatible beta set. Claude Code session betas 401 it. */
 export function setupTokenBetaHeader(modelId = '') {
-  if (/haiku/i.test(String(modelId || ''))) return HAIKU_BETA_HEADER
+  if (isLegacyHaiku(modelId)) return HAIKU_BETA_HEADER
   return joinBetas([BETA_OAUTH, BETA_INTERLEAVED, BETA_CONTEXT_MANAGEMENT])
 }
 

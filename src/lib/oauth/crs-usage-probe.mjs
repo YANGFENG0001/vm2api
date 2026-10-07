@@ -137,7 +137,7 @@ export function isCompleteOAuthUsage(data = {}, parsed = null) {
   const p = parsed || parseOAuthUsage(data)
   if (!p.five_hour || !p.seven_day) return false
   if (p.usage_has_fable !== null) return true
-  // 2.1.284 GET /api/oauth/usage is a Utilization object: named windows, no limits[] catalog.
+  // 2.1.293 GET /api/oauth/usage is a Utilization object: named windows, no limits[] catalog.
   if (
     data.seven_day_sonnet !== undefined ||
     data.seven_day_opus !== undefined ||

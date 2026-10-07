@@ -39,9 +39,10 @@ test('HAIKU_BETA_HEADER is oauth + interleaved only', () => {
   assert.equal(HAIKU_BETA_HEADER, `${BETA_OAUTH},${BETA_INTERLEAVED}`)
 })
 
-test('defaultOfficialBetaHeader picks haiku header for haiku models', () => {
+test('defaultOfficialBetaHeader keeps the short header on legacy haiku only', () => {
   assert.equal(defaultOfficialBetaHeader('claude-haiku-4-5'), HAIKU_BETA_HEADER)
-  assert.equal(defaultOfficialBetaHeader('claude-haiku-5'), HAIKU_BETA_HEADER)
+  assert.equal(defaultOfficialBetaHeader('claude-haiku-5'), DEFAULT_BETA_HEADER)
+  assert.equal(defaultOfficialBetaHeader('claude-haiku-5-5'), DEFAULT_BETA_HEADER)
   assert.equal(defaultOfficialBetaHeader('sonnet'), DEFAULT_BETA_HEADER)
   assert.equal(defaultOfficialBetaHeader(''), DEFAULT_BETA_HEADER)
   assert.equal(defaultOfficialBetaHeader(), DEFAULT_BETA_HEADER)
@@ -78,8 +79,9 @@ test('apiKeyBetaHeader strips oauth and falls back to API_KEY_BETAS when empty',
   assert.equal(apiKeyBetaHeader(`${BETA_CLAUDE_CODE},${BETA_INTERLEAVED}`), `${BETA_CLAUDE_CODE},${BETA_INTERLEAVED}`)
 })
 
-test('setupTokenBetaHeader uses haiku set for haiku models, otherwise oauth+interleaved+context-management', () => {
+test('setupTokenBetaHeader uses the short haiku set only for legacy haiku', () => {
   assert.equal(setupTokenBetaHeader('claude-haiku-4-5'), HAIKU_BETA_HEADER)
+  assert.equal(setupTokenBetaHeader('claude-haiku-5-5'), `${BETA_OAUTH},${BETA_INTERLEAVED},${BETA_CONTEXT_MANAGEMENT}`)
   assert.equal(setupTokenBetaHeader('claude-sonnet-5'), `${BETA_OAUTH},${BETA_INTERLEAVED},${BETA_CONTEXT_MANAGEMENT}`)
   assert.equal(setupTokenBetaHeader(''), `${BETA_OAUTH},${BETA_INTERLEAVED},${BETA_CONTEXT_MANAGEMENT}`)
 })

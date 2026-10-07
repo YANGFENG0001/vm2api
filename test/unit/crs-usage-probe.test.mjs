@@ -33,7 +33,7 @@ test('oauth usage parse: official percent scale 1 = 1%', () => {
   assert.equal(p.extra_usage.is_enabled, true)
 })
 
-test('oauth usage parse: 2.1.284 windows stay separate', () => {
+test('oauth usage parse: 2.1.293 windows stay separate', () => {
   const p = parseOAuthUsage({
     five_hour: { utilization: 12, resets_at: '2026-10-07T20:00:00Z' },
     seven_day: { utilization: 34, resets_at: '2026-10-12T00:00:00Z' },

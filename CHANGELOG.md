@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.3.123 — 2026-10-08
+
+- Claude Code 出站身份对齐 2.1.293。UA、`CLAUDE_CODE_VERSION`、槽内 cli-node、kernel 缺省和换票二进制都是 `claude-cli/2.1.293`。CCH 种子不变。
+- 模型列表加入 `claude-haiku-5-5`。原生 1M，`max_tokens` 128000/128000，默认 effort `medium`，知识截止 June 2026。裸 `haiku` 仍是 Haiku 4.5。三方回退 Haiku 4.5，没有 gateway id。
+- `thinking.budget_tokens` 改成 adaptive。`disabled` 只在 effort 为 high 及以下保留。
+- 计费 haiku_55：$0.10 / $0.50，缓存写 5m $0.125、1h $0.20，缓存读 $0.01。prompt 超过 10 万 token：输入 $0.50、输出 $2.50、缓存读 $0.05，缓存写 1.25× / 2×。
+
+已部署机升级：更新 Node 控制面并重启一次 Node。`share/wrap-cli/cli-node`、`bin/kin-kernel`、`bin/kin-worker`、`bin/kin-oauth-auth` 字节会变，**需要 `wrap-cli/sync`**（逐槽重启 dataplane，不要 `docker rm`）。不要覆盖 `routing.json`、`vms/`、`data/`、`.env`。
+
 ## 1.3.122 — 2026-10-08
 
 - 确定性蒸馏正则只放在硬前置，类别是 distill。保存蒸馏配置不再把这组正则补回去。命中仍是 403 `distill_blocked`。它们跟蒸馏总开关走，不跟硬正则开关：关掉硬正则仍拦这些短语，关掉蒸馏拦截则放行。官方客户端和 0 注入仍拦。针、指纹和结构收割留在蒸馏检测器。

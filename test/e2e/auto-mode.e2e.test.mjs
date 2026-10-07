@@ -347,7 +347,7 @@ async function harness(t, layout = 'zero', cliPath = cli) {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'user-agent': 'claude-cli/2.1.284 (external, sdk-cli)',
+        'user-agent': 'claude-cli/2.1.293 (external, sdk-cli)',
         ...headers,
       },
       body: JSON.stringify({
@@ -358,7 +358,7 @@ async function harness(t, layout = 'zero', cliPath = cli) {
             ? [
                 {
                   type: 'text',
-                  text: 'x-anthropic-billing-header: cc_version=2.1.284; cc_entrypoint=sdk-cli; cch=00000;',
+                  text: 'x-anthropic-billing-header: cc_version=2.1.293; cc_entrypoint=sdk-cli; cch=00000;',
                 },
               ]
             : []),

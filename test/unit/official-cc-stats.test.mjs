@@ -153,7 +153,7 @@ test('2.1.28x /usage text needs session and all-models rows before it is complet
   assert.equal(stats.account_tier, null)
 })
 
-test('2.1.284 print /usage result JSON keeps every utilization field', () => {
+test('2.1.293 print /usage result JSON keeps every utilization field', () => {
   const payload = {
     five_hour: { utilization: 12, resets_at: '2026-10-07T20:00:00Z' },
     seven_day: { utilization: 34, resets_at: '2026-10-12T00:00:00Z' },

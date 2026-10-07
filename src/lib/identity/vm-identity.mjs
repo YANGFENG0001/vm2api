@@ -19,8 +19,8 @@ export function readJsonSafe(p, fallback = null) {
   }
 }
 
-/** Official Claude Code version. 2.1.283 and older are below the 2.1.284 minimum. */
-export const OFFICIAL_CLI_VERSION = '2.1.284'
+/** Official Claude Code version. 2.1.292 and older are below the 2.1.293 minimum. */
+export const OFFICIAL_CLI_VERSION = '2.1.293'
 export const OFFICIAL_CLAUDE_CLI_UA = `claude-cli/${OFFICIAL_CLI_VERSION} (external, sdk-cli)`
 export const OFFICIAL_STAINLESS = Object.freeze({
   stainless_lang: 'js',

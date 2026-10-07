@@ -11,7 +11,7 @@
  * already-initialized residents without another hello.
  *
  * Every bootstrap CLI runs with CLAUDE_CODE_HOST_REFRESH=1 (the name
- * cli-node 2.1.284 reads) plus CLAUDE_CODE_VERSION. The host Go Refresher
+ * cli-node 2.1.293 reads) plus CLAUDE_CODE_VERSION. The host Go Refresher
  * is the only RT writer. Node never dials Anthropic.
  * After hello, quota is CLI `/usage` inside the slot (one try, then two retries).
  * Account tier comes from GET /api/oauth/profile via kin-worker oauth.
@@ -52,7 +52,7 @@ import { slotHost } from '../vm/slot-host.mjs'
 
 export { officialCcUidGid } from '../vm/vm-runtime.mjs'
 export const DEFAULT_HELLO_PROMPT = 'hello'
-/** Plan limits. 2.1.284 `/stats` is activity and `/cost` is session cost. */
+/** Plan limits. 2.1.293 `/stats` is activity and `/cost` is session cost. */
 export const DEFAULT_USAGE_PROMPT = '/usage'
 export const DEFAULT_PLAN_PROMPT = DEFAULT_HELLO_PROMPT
 /** `/usage` in the slot is retried at most this many times after the first try. */

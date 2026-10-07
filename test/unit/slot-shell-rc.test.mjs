@@ -5,7 +5,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { panelShellLaunch } from '../../src/lib/vm/slot-shell.mjs'
-
+import { OFFICIAL_CLI_VERSION } from '../../src/lib/identity/vm-identity.mjs'
 test('claude in the panel shell runs cli-node and points config at .claude', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'slot-shell-rc-'))
   const bin = path.join(dir, 'cli-node')
@@ -21,7 +21,7 @@ test('claude in the panel shell runs cli-node and points config at .claude', () 
   assert.match(cmd.at(-1), /bash --rcfile/)
   assert.match(rc, /CLAUDE_CONFIG_DIR/)
   assert.match(rc, /CLAUDE_CODE_HOST_REFRESH=1/)
-  assert.match(rc, /CLAUDE_CODE_VERSION=2\.1\.284/)
+  assert.match(rc, new RegExp(`CLAUDE_CODE_VERSION=${OFFICIAL_CLI_VERSION.replaceAll('.', '\\.')}`))
   assert.match(rc, /USER_TYPE=external/)
   const rcPath = path.join(dir, 'rc')
   fs.writeFileSync(rcPath, `${rc}\n`)
