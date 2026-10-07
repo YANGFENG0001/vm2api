@@ -1,99 +1,323 @@
-# 构建并发布 vm2api 控制面镜像到 GitHub Container Registry (GHCR)。
+# 把上游 dofastted/vm2api 已发布的「版本镜像」镜像到本 fork 的 GHCR，
+# 让面板的「一键更新」能真正拉到你自己的镜像。
 #
-# 标签方案与上游 release.yml 完全一致，目的是让面板的「一键更新」能拉到本 fork 的镜像。
+# ===========================================================================
+# 为什么是「镜像上游」而不是「自己构建」？
+# ===========================================================================
 #
+# 面板一键更新的完整链路（都在源码里，改不了）：
+#
+#   1. src/lib/admin/release.mjs
+#        export const GITHUB_REPO = 'dofastted/vm2api'      ← 写死的常量，无环境变量
+#      面板 GET /api/panel/version 时去查
+#        https://api.github.com/repos/dofastted/vm2api/releases/latest
+#      拿到的 tag 就是界面上的「GitHub 最新」和 latest_tag。
+#
+#   2. web/src/features/settings/about-pane.tsx
+#      点「一键更新」→ POST /api/panel/update {confirm:true, version:"vX.Y.Z"}
+#
+#   3. src/lib/admin/release.mjs startHostUpgrade()
+#      （镜像安装模式，即 /opt/vm2api 下没有 .git）把 .env 里的
+#        VM2API_IMAGE_TAG 改成 vX.Y.Z
+#      然后执行 docker compose pull && docker compose up -d
+#
+#   4. docker-compose.yml
+#        image: ${VM2API_IMAGE:-ghcr.io/dofastted/vm2api}:${VM2API_IMAGE_TAG:-latest}
+#
+# 结论：只要 .env 里设置 VM2API_IMAGE=ghcr.io/<你的用户名>/vm2api，
+#       并且你的 registry 上存在与上游同名的 vX.Y.Z 标签，
+#       一键更新就会从你的 fork 拉镜像 —— 版本发现用上游、镜像拉取用你自己的。
+#
+# 为什么不能靠「读自己仓库的 VERSION 再构建」？
+#   上游发版极快（v1.3.110 → v1.3.115 只用了 18 小时，约 1~2 小时一版）。
+#   自己构建永远慢一两版：面板说最新是 v1.3.115，你仓库只有 v1.3.114，
+#   docker compose pull 直接报 manifest unknown → 一键更新失败。
+#   直接复制上游已发布的镜像可以做到标签零偏差，而且几秒钟完成、不会构建失败。
+#
+# ===========================================================================
+# 标签方案（与上游 release.yml 完全一致）
+# ===========================================================================
 #   amd64    → ghcr.io/<owner>/vm2api:vX.Y.Z-amd64
 #   arm64    → ghcr.io/<owner>/vm2api:vX.Y.Z-arm64
-#   manifest → ghcr.io/<owner>/vm2api:vX.Y.Z  和  ghcr.io/<owner>/vm2api:latest
+#   manifest → ghcr.io/<owner>/vm2api:vX.Y.Z   以及   ghcr.io/<owner>/vm2api:latest
 #
-# ---------------------------------------------------------------------------
-# 为什么必须发布「版本标签」而不是只有 :latest？
+# 触发时机：
+#   · 每 15 分钟轮询上游 releases（无变化时只跑一次 API 调用，约 10 秒）
+#   · sync-upstream 每次跑完就跟着跑（复用它的 10 分钟心跳，延迟更低）
+#   · 手动 workflow_dispatch（可指定版本 / 一次性补齐最近 N 版）
+#   · 本文件自身被修改
 #
-#   面板的版本发现逻辑在 src/lib/admin/release.mjs，仓库地址是写死的常量：
-#       export const GITHUB_REPO = 'dofastted/vm2api'
-#   没有环境变量可以改。也就是说：
-#     · 「检查更新」永远读上游 dofastted/vm2api 的 GitHub Release 得到 latest_tag
-#     · 升级命令固定指向上游的 deploy/install.sh
-#     · 升级时 install.sh 把 .env 里的 VM2API_IMAGE_TAG 设成 vX.Y.Z，再 docker compose pull
-#
-#   而 docker-compose.yml 里镜像是：
-#       image: ${VM2API_IMAGE:-ghcr.io/dofastted/vm2api}:${VM2API_IMAGE_TAG:-latest}
-#
-#   所以只要满足两个条件，就能做到「版本发现用上游、镜像拉取用你自己的」：
-#     1. .env 里设置 VM2API_IMAGE=ghcr.io/<你的用户名>/vm2api
-#     2. 本工作流发布了与上游同名的 vX.Y.Z 标签
-#   这样 install.sh 设的 VM2API_IMAGE_TAG=v1.3.111 就会从你的 fork 拉镜像。
-#   之前只有 :latest，导致拉 vX.Y.Z 时报 manifest unknown，一键更新直接失败。
-# ---------------------------------------------------------------------------
-#
-# 触发条件：
-#   · main 分支上的 VERSION 文件发生变化 —— 上游每次发版都会 bump VERSION，
-#     sync-upstream 把新值同步过来后本工作流自动构建，不需要你手动打 git tag。
-#   · 本工作流文件自身被修改（改构建配置后自动重建一次）。
-#   · 手动 workflow_dispatch。
-#
-#   特意不监听 git tag：上游自带的 release.yml 已经会在 v* tag 上发布镜像，
-#   两者同时跑会重复推送同一批标签。
-#
-# ⚠️ 首次启用需要手动跑一次：Actions → docker-image → Run workflow，
-#    把当前 VERSION 对应的版本标签补出来。
+# 前置条件：
+#   1. 仓库 Settings → Actions → General → Workflow permissions
+#      选择「Read and write permissions」（否则 GITHUB_TOKEN 推不了包）
+#   2. 仓库 Packages 页面把 vm2api 包设为 Public
+#      （私有包在 VPS 上 docker compose pull 会 401；或者你改成 docker login ghcr.io）
+# ===========================================================================
 name: docker-image
 
 on:
+  schedule:
+    # 上游发版快，15 分钟一次能把「面板显示有新版本」到「镜像可拉取」的窗口压到最小
+    - cron: '*/15 * * * *'
+  workflow_run:
+    # sync-upstream 每次跑完都跟一次，天然复用它的 10 分钟心跳
+    workflows: ["sync-upstream"]
+    types: [completed]
   push:
     branches: [main]
     paths:
-      - 'VERSION'
       - '.github/workflows/docker-image.yml'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: '指定上游版本标签（如 v1.3.115）；留空 = 自动取上游最新 release'
+        type: string
+        required: false
+        default: ''
+      count:
+        description: '同时补齐最近 N 个版本（默认 3，用于补历史标签）'
+        type: string
+        required: false
+        default: '3'
+      build:
+        description: '改为从本仓库源码构建（慢，且版本会落后上游；仅在你改了代码时才用）'
+        type: boolean
+        required: false
+        default: false
 
 concurrency:
-  group: docker-image-${{ github.ref }}
-  cancel-in-progress: true
+  group: docker-image
+  cancel-in-progress: false
 
 permissions:
   contents: read
   packages: write
 
+env:
+  UPSTREAM_REPO: dofastted/vm2api
+
 jobs:
   # ---------------------------------------------------------------------------
-  # 解析镜像名与版本标签。不 checkout —— 用 raw 链接直接读 VERSION，
-  # 避免为了一个 8 字节的文件去拉 400MB+ 的仓库。
+  # plan：解析上游最新版本 + 最近几个版本，并检查本 fork 缺哪些标签。
+  #       不 checkout —— 全部走 API，避免为几个字节去拉 400MB+ 的仓库。
   # ---------------------------------------------------------------------------
-  meta:
+  plan:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     outputs:
       image: ${{ steps.resolve.outputs.image }}
-      version: ${{ steps.resolve.outputs.version }}
+      latest: ${{ steps.resolve.outputs.latest }}
+      missing: ${{ steps.probe.outputs.missing }}
+      has_missing: ${{ steps.probe.outputs.has_missing }}
     steps:
-      - name: Resolve image name and version
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Resolve upstream release tags
         id: resolve
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          INPUT_COUNT: ${{ github.event.inputs.count }}
+        run: |
+          set -euo pipefail
+          owner="$(printf '%s' "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          echo "image=ghcr.io/${owner}/vm2api" >> "${GITHUB_OUTPUT}"
+
+          count="${INPUT_COUNT:-3}"
+          case "${count}" in ''|*[!0-9]*) count=3 ;; esac
+          [ "${count}" -lt 1 ] && count=1
+          [ "${count}" -gt 20 ] && count=20
+
+          list="${RUNNER_TEMP}/candidates.txt"
+          : > "${list}"
+
+          if [ -n "${INPUT_TAG}" ]; then
+            printf '%s\n' "${INPUT_TAG}" >> "${list}"
+          else
+            curl -sSL --retry 3 --retry-delay 2 \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H 'Accept: application/vnd.github+json' \
+              "https://api.github.com/repos/${UPSTREAM_REPO}/releases?per_page=${count}" \
+              | node -e '
+                const fs = require("fs");
+                let data = [];
+                try { data = JSON.parse(fs.readFileSync(0, "utf8")); } catch { data = []; }
+                const out = [];
+                for (const rel of Array.isArray(data) ? data : []) {
+                  const tag = String((rel && rel.tag_name) || "").trim();
+                  if (/^v\d+\.\d+\.\d+$/.test(tag) && !out.includes(tag)) out.push(tag);
+                }
+                if (out.length) process.stdout.write(out.join("\n") + "\n");
+              ' >> "${list}"
+          fi
+
+          latest="$(head -n1 "${list}")"
+          if ! printf '%s' "${latest}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::解析上游版本失败：'${latest}'（GitHub API 可能限流，或上游没有 release）"
+            exit 1
+          fi
+          echo "latest=${latest}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "### docker-image"
+            echo ""
+            echo "- 上游最新版本：\`${latest}\`"
+            echo "- 本轮检查：$(paste -sd' ' "${list}")"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Probe which tags are missing
+        id: probe
         shell: bash
         run: |
           set -euo pipefail
-          owner=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
-          raw=$(curl -sSL --retry 3 --retry-delay 2 \
-            "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/VERSION" | tr -d '[:space:]')
+          image="${{ steps.resolve.outputs.image }}"
+          missing=()
+          while IFS= read -r tag; do
+            [ -z "${tag}" ] && continue
+            if docker buildx imagetools inspect "${image}:${tag}" >/dev/null 2>&1; then
+              echo "✓ 已有 ${image}:${tag}"
+            else
+              echo "✗ 缺失 ${image}:${tag}"
+              missing+=("${tag}")
+            fi
+          done < "${RUNNER_TEMP}/candidates.txt"
+
+          if [ "${#missing[@]}" -eq 0 ]; then
+            echo 'missing=[]' >> "${GITHUB_OUTPUT}"
+            echo 'has_missing=false' >> "${GITHUB_OUTPUT}"
+            echo "本 fork 已与上游对齐，无需同步。"
+          else
+            json="$(printf '%s\n' "${missing[@]}" | node -e '
+              const fs = require("fs");
+              const arr = fs.readFileSync(0, "utf8").split("\n").map((s) => s.trim()).filter(Boolean);
+              process.stdout.write(JSON.stringify(arr));
+            ')"
+            echo "missing=${json}" >> "${GITHUB_OUTPUT}"
+            echo 'has_missing=true' >> "${GITHUB_OUTPUT}"
+            echo "需要补齐：${missing[*]}"
+          fi
+
+  # ---------------------------------------------------------------------------
+  # mirror：把上游的 vX.Y.Z / vX.Y.Z-amd64 / vX.Y.Z-arm64 复制到本 fork 的 GHCR。
+  #         docker buildx imagetools create 是纯 registry 之间的 manifest 复制，
+  #         不需要 docker daemon、不重新构建，一个标签通常几秒到一两分钟。
+  #         上游 ghcr.io/dofastted/vm2api 是公开包，匿名即可拉取。
+  # ---------------------------------------------------------------------------
+  mirror:
+    needs: plan
+    if: needs.plan.outputs.has_missing == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: ${{ fromJSON(needs.plan.outputs.missing) }}
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Mirror ${{ matrix.tag }}
+        shell: bash
+        env:
+          IMAGE: ${{ needs.plan.outputs.image }}
+          TAG: ${{ matrix.tag }}
+        run: |
+          set -euo pipefail
+          src="ghcr.io/${UPSTREAM_REPO}"
+          copied=0
+          for suffix in '' '-amd64' '-arm64'; do
+            ref="${TAG}${suffix}"
+            if ! docker buildx imagetools inspect "${src}:${ref}" >/dev/null 2>&1; then
+              echo "上游没有 ${src}:${ref}，跳过"
+              continue
+            fi
+            docker buildx imagetools create -t "${IMAGE}:${ref}" "${src}:${ref}"
+            echo "✓ ${IMAGE}:${ref}"
+            copied=$((copied + 1))
+          done
+          if [ "${copied}" -eq 0 ]; then
+            echo "::error::上游 ${src}:${TAG} 不存在，无法同步"
+            exit 1
+          fi
+
+  # ---------------------------------------------------------------------------
+  # retag-latest：把本 fork 的 :latest 指到上游最新版本。
+  #               （mirror 被跳过时也要跑，保证 latest 不会停留在旧版本）
+  # ---------------------------------------------------------------------------
+  retag-latest:
+    needs: [plan, mirror]
+    if: always() && needs.plan.result == 'success' && needs.plan.outputs.latest != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Point :latest at ${{ needs.plan.outputs.latest }}
+        shell: bash
+        env:
+          IMAGE: ${{ needs.plan.outputs.image }}
+          TAG: ${{ needs.plan.outputs.latest }}
+        run: |
+          set -euo pipefail
+          if ! docker buildx imagetools inspect "${IMAGE}:${TAG}" >/dev/null 2>&1; then
+            echo "::warning::${IMAGE}:${TAG} 还不存在（mirror 未完成），跳过 latest 更新，下一轮会补上"
+            exit 0
+          fi
+          docker buildx imagetools create -t "${IMAGE}:latest" "${IMAGE}:${TAG}"
+          echo "✓ ${IMAGE}:latest → ${TAG}"
+
+  # ---------------------------------------------------------------------------
+  # 以下是可选的「自己构建」路径，只在手动 Run workflow 且勾选 build=true 时执行。
+  # 日常不要用它：构建出来的版本号来自本仓库的 VERSION，会落后上游 1~2 版，
+  # 反而让面板的一键更新拉不到对应标签。仅当你真的改了源码才需要。
+  # ---------------------------------------------------------------------------
+  build-meta:
+    needs: plan
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - name: Read VERSION from the pushed commit
+        id: v
+        shell: bash
+        run: |
+          set -euo pipefail
+          raw="$(curl -sSL --retry 3 --retry-delay 2 \
+            "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/VERSION" | tr -d '[:space:]')"
           if [ -z "${raw}" ]; then
             echo "::error::读不到 VERSION 文件内容"
             exit 1
           fi
-          ver="v${raw#v}"
-          echo "image=ghcr.io/${owner}/vm2api" >> "${GITHUB_OUTPUT}"
-          echo "version=${ver}" >> "${GITHUB_OUTPUT}"
-          {
-            echo "### 镜像发布"
-            echo ""
-            echo "- 镜像：\`ghcr.io/${owner}/vm2api\`"
-            echo "- 版本标签：\`${ver}\`"
-          } >> "${GITHUB_STEP_SUMMARY}"
+          echo "version=v${raw#v}" >> "${GITHUB_OUTPUT}"
 
-  # ---------------------------------------------------------------------------
-  # amd64：仓库根目录 Dockerfile（bin/*、web/dist、share/wrap-cli 都随 git 提交，无需编译）
-  # ---------------------------------------------------------------------------
-  amd64:
-    needs: meta
+  build-amd64:
+    needs: [plan, build-meta]
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -118,17 +342,15 @@ jobs:
           platforms: linux/amd64
           provenance: false
           push: true
-          tags: ${{ needs.meta.outputs.image }}:${{ needs.meta.outputs.version }}-amd64
+          tags: ${{ needs.plan.outputs.image }}:${{ needs.build-meta.outputs.version }}-amd64
           cache-from: type=gha,scope=vm2api-amd64
           cache-to: type=gha,scope=vm2api-amd64,mode=max
 
-  # ---------------------------------------------------------------------------
-  # arm64：必须用 deploy/Dockerfile.arm64-control —— 根 Dockerfile 里装的是 amd64 ELF，
+  # arm64 必须用 deploy/Dockerfile.arm64-control —— 根 Dockerfile 里装的是 amd64 ELF，
   # 直接拿它构建 arm64 会得到跑不起来的镜像。
-  # 只需要 amd64 的话，删掉本 job 和下面的 manifest job。
-  # ---------------------------------------------------------------------------
-  arm64:
-    needs: meta
+  build-arm64:
+    needs: [plan, build-meta]
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.build == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     steps:
@@ -153,15 +375,13 @@ jobs:
           platforms: linux/arm64
           provenance: false
           push: true
-          tags: ${{ needs.meta.outputs.image }}:${{ needs.meta.outputs.version }}-arm64
+          tags: ${{ needs.plan.outputs.image }}:${{ needs.build-meta.outputs.version }}-arm64
           cache-from: type=gha,scope=vm2api-arm64
           cache-to: type=gha,scope=vm2api-arm64,mode=max
 
-  # ---------------------------------------------------------------------------
-  # manifest：合并成多架构标签 vX.Y.Z 与 latest
-  # ---------------------------------------------------------------------------
-  manifest:
-    needs: [meta, amd64, arm64]
+  build-manifest:
+    needs: [plan, build-meta, build-amd64, build-arm64]
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -179,18 +399,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          image="${{ needs.meta.outputs.image }}"
-          ver="${{ needs.meta.outputs.version }}"
+          image="${{ needs.plan.outputs.image }}"
+          ver="${{ needs.build-meta.outputs.version }}"
           for tag in "${ver}" latest; do
             docker buildx imagetools create \
               -t "${image}:${tag}" \
               "${image}:${ver}-amd64" \
               "${image}:${ver}-arm64"
           done
-          docker buildx imagetools inspect --raw "${image}:${ver}" | python3 -c '
-          import json, sys
-          found = {(m.get("platform") or {}).get("architecture") for m in json.load(sys.stdin).get("manifests", [])}
-          missing = {"amd64", "arm64"} - found
-          assert not missing, f"manifest list lacks {sorted(missing)}"
-          print("manifest platforms:", sorted(p for p in found if p))
+          docker buildx imagetools inspect --raw "${image}:${ver}" | node -e '
+            const fs = require("fs");
+            const raw = JSON.parse(fs.readFileSync(0, "utf8"));
+            const found = new Set((raw.manifests || []).map((m) => (m.platform || {}).architecture));
+            const missing = ["amd64", "arm64"].filter((a) => !found.has(a));
+            if (missing.length) {
+              console.error("manifest list lacks: " + missing.join(", "));
+              process.exit(1);
+            }
+            console.log("manifest platforms: " + [...found].filter(Boolean).sort().join(", "));
           '
