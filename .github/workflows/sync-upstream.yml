@@ -29,6 +29,14 @@
 #    然后 仓库 Settings → Secrets and variables → Actions → New repository secret，
 #    名字填 SYNC_TOKEN。
 # ---------------------------------------------------------------------------
+# ⚠️ 绝对不要在这个工作流里往 fork 推送 git tag。
+#    本仓库保留了上游自带的 release.yml，它的触发条件是 `on: push: tags: ['v*']`，
+#    会为每个 tag 跑一整套多架构构建（amd64 + arm64 + manifest，40~60 分钟）。
+#    上游历史上有 100+ 个 vX.Y.Z tag，一次全推会瞬间排队上百个构建。
+#    fork 的镜像由 docker-image.yml 直接镜像上游，不需要 git tag，也不需要 release.yml。
+#    如果哪天确实要用 VM2API_GITHUB_REPO 指向本 fork，请先在
+#    Actions 页面把 release 工作流 Disable 掉，再考虑镜像 tag。
+# ---------------------------------------------------------------------------
 name: sync-upstream
 
 on:
@@ -178,87 +186,4 @@ jobs:
             else
               echo "- ⚠️ 未完成，详见上方日志"
             fi
-          } >> "${GITHUB_STEP_SUMMARY}"
-
-  # ---------------------------------------------------------------------------
-  # mirror-tags：把上游的 vX.Y.Z git tag 也复制到本 fork。
-  #
-  # 为什么单独一个 job？
-  #   · 上面的 sync 只在「上游有新的 main 提交」时才跑，而上游切 tag 时
-  #     那个提交通常早就同步过了 → changed=false → 永远不会补 tag。
-  #   · 所以这里每次都用 GitHub API 直接比对/新建 ref，不做 git clone，
-  #     10 秒左右完成，不影响主同步流程。
-  #
-  # 有什么用？
-  #   deploy/install.sh 的 GITHUB_REPO="${VM2API_GITHUB_REPO:-dofastted/vm2api}"，
-  #   latest_release_tag() 在 release 查不到时会退回
-  #   `git ls-remote --tags https://github.com/<repo>.git`。
-  #   只有 fork 上有这些 tag，把 VM2API_GITHUB_REPO 指向自己的 fork 才可用。
-  #
-  # 提交还没合并到 fork 时 GitHub 会返回 422，跳过即可，下一轮会补上。
-  # continue-on-error：这一环失败绝不能影响上游代码同步。
-  # ---------------------------------------------------------------------------
-  mirror-tags:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    continue-on-error: true
-    steps:
-      - name: Mirror upstream release tags
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.SYNC_TOKEN || secrets.GITHUB_TOKEN }}
-        run: |
-          set -uo pipefail
-          api="https://api.github.com"
-          up="$(curl -sS --retry 3 --retry-delay 2 \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H 'Accept: application/vnd.github+json' \
-            "${api}/repos/${UPSTREAM_REPO}/tags?per_page=100" || echo '[]')"
-          fk="$(curl -sS --retry 3 --retry-delay 2 \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H 'Accept: application/vnd.github+json' \
-            "${api}/repos/${GITHUB_REPOSITORY}/tags?per_page=100" || echo '[]')"
-
-          plan="$(UP="${up}" FK="${fk}" node -e '
-            const parse = (s) => { try { return JSON.parse(s); } catch { return []; } };
-            const upstream = parse(process.env.UP);
-            const fork = parse(process.env.FK);
-            const have = new Set((Array.isArray(fork) ? fork : []).map((t) => t && t.name));
-            const out = [];
-            for (const t of Array.isArray(upstream) ? upstream : []) {
-              const name = String((t && t.name) || "").trim();
-              const sha = String((t && t.commit && t.commit.sha) || "").trim();
-              if (!/^v\d+\.\d+\.\d+$/.test(name)) continue;
-              if (!sha || have.has(name)) continue;
-              out.push(name + "\t" + sha);
-            }
-            if (out.length) process.stdout.write(out.join("\n") + "\n");
-          ')"
-
-          if [ -z "${plan}" ]; then
-            echo "上游 release tag 已全部同步到本 fork。"
-            exit 0
-          fi
-
-          created=0
-          pending=0
-          while IFS="$(printf '\t')" read -r name sha; do
-            [ -z "${name}" ] && continue
-            code="$(curl -sS -o /tmp/tagresp.json -w '%{http_code}' -X POST \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              -H 'Accept: application/vnd.github+json' \
-              "${api}/repos/${GITHUB_REPOSITORY}/git/refs" \
-              -d "{\"ref\":\"refs/tags/${name}\",\"sha\":\"${sha}\"}" || echo 000)"
-            case "${code}" in
-              201) echo "✓ 新建 tag ${name} → ${sha:0:10}"; created=$((created + 1)) ;;
-              422) echo "⏭ ${name} 指向的提交还没同步到 fork（${sha:0:10}），下一轮再试"; pending=$((pending + 1)) ;;
-              *)   echo "⚠ ${name} 失败 HTTP ${code}：$(head -c 200 /tmp/tagresp.json 2>/dev/null || true)" ;;
-            esac
-          done <<< "${plan}"
-
-          {
-            echo "### 上游 tag 镜像"
-            echo ""
-            echo "- 新建：**${created}** 个"
-            echo "- 待下一轮：**${pending}** 个"
           } >> "${GITHUB_STEP_SUMMARY}"
