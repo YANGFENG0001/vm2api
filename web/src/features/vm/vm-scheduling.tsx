@@ -35,6 +35,7 @@ type Draft = {
   seats: Knob<number>
   conc: Knob<number>
   rpm: Knob<number>
+  sessions: Knob<number>
   /** 'auto' = 按 7D 重置倒计时自动算；数字 = 手动 1–10。 */
   level: 'auto' | number
   quota: Record<QuotaKey, Knob<number | boolean>>
@@ -92,6 +93,10 @@ function draftOf(vm: Vm): Draft {
       own: vm.rpm_override === true,
       value: Number(vm.max_rpm ?? inherited?.max_rpm ?? 0),
     },
+    sessions: {
+      own: vm.max_sessions_override === true,
+      value: Number(vm.max_sessions ?? inherited?.max_sessions ?? 0),
+    },
     level:
       vm.schedule_level_mode === 'manual' && Number(vm.schedule_level) >= 1
         ? Number(vm.schedule_level)
@@ -105,7 +110,7 @@ function patchOf(vm: Vm, draft: Draft): VmPatch {
   const body: VmPatch = {}
   const before = draftOf(vm)
   const knob = (
-    key: 'session_slots' | 'max_concurrency' | 'max_rpm',
+    key: 'session_slots' | 'max_concurrency' | 'max_rpm' | 'max_sessions',
     next: Knob<number>,
     prev: Knob<number>
   ) => {
@@ -118,6 +123,7 @@ function patchOf(vm: Vm, draft: Draft): VmPatch {
   if (!isCodexVm(vm)) knob('session_slots', draft.seats, before.seats)
   knob('max_concurrency', draft.conc, before.conc)
   knob('max_rpm', draft.rpm, before.rpm)
+  if (isCodexVm(vm)) knob('max_sessions', draft.sessions, before.sessions)
   if (draft.level !== before.level) {
     body.schedule_level = draft.level === 'auto' ? null : draft.level
   }
@@ -147,7 +153,8 @@ function overrideCount(vm: Vm): number {
     quota +
     Number(vm.session_slots_override === true) +
     Number(vm.concurrency_override === true) +
-    Number(vm.rpm_override === true)
+    Number(vm.rpm_override === true) +
+    Number(vm.max_sessions_override === true)
   )
 }
 
@@ -261,8 +268,10 @@ export function VmSchedulingBlock({
           own={vm.concurrency_override}
           title={
             vm.concurrency_override
-              ? `本槽钉住；分档值 ${inherited?.max_concurrency ?? '—'}`
-              : '跟随分档'
+              ? `本槽钉住；${codex ? 'OpenAI 全局' : '分档'}值 ${inherited?.max_concurrency ?? '—'}`
+              : codex
+                ? '跟随 OpenAI 全局默认'
+                : '跟随分档'
           }
         />
         <Tile
@@ -271,8 +280,10 @@ export function VmSchedulingBlock({
           own={vm.rpm_override}
           title={
             vm.rpm_override
-              ? `本槽钉住；分档值 ${inherited?.max_rpm || '不限'}`
-              : '跟随分档'
+              ? `本槽钉住；${codex ? 'OpenAI 全局' : '分档'}值 ${inherited?.max_rpm || '不限'}`
+              : codex
+                ? '跟随 OpenAI 全局默认'
+                : '跟随分档'
           }
         />
         {codex ? null : (
@@ -287,16 +298,30 @@ export function VmSchedulingBlock({
             }
           />
         )}
-        <Tile
-          label='调度等级'
-          value={
-            Number.isInteger(level)
-              ? `${level} 级 · ${vm.schedule_level_mode === 'manual' ? '手动' : '自动'}`
-              : '—'
-          }
-          own={vm.schedule_level_mode === 'manual'}
-          title='等级高的 VM 先开席位；自动模式按 7D 重置倒计时算'
-        />
+        {codex ? (
+          <Tile
+            label='会话容量'
+            value={vm.max_sessions ? vm.max_sessions : '不限'}
+            own={vm.max_sessions_override}
+            title={
+              vm.max_sessions_override
+                ? `本槽钉住；全局 ${inherited?.max_sessions ?? '不限'}`
+                : '跟随 OpenAI 全局默认'
+            }
+          />
+        ) : null}
+        {!codex ? (
+          <Tile
+            label='调度等级'
+            value={
+              Number.isInteger(level)
+                ? `${level} 级 · ${vm.schedule_level_mode === 'manual' ? '手动' : '自动'}`
+                : '—'
+            }
+            own={vm.schedule_level_mode === 'manual'}
+            title='等级高的 VM 先开席位；自动模式按 7D 重置倒计时算'
+          />
+        ) : null}
         {codex || !policy
           ? null
           : QUOTA_FIELDS.map(({ key, label }) => (
@@ -409,6 +434,7 @@ export function VmSchedulingEditor({ vm }: { vm: Vm }) {
       seats: { ...draft.seats, own: false },
       conc: { ...draft.conc, own: false },
       rpm: { ...draft.rpm, own: false },
+      sessions: { ...draft.sessions, own: false },
       level: 'auto',
       quota: Object.fromEntries(
         QUOTA_FIELDS.map(({ key }) => [
@@ -483,7 +509,11 @@ export function VmSchedulingEditor({ vm }: { vm: Vm }) {
               )}
               <KnobRow
                 label='并发上限'
-                desc='同一时刻在飞的请求数；满了在本 VM 排队，不切号。'
+                desc={
+                  codex
+                    ? '同时在飞的 OpenAI 请求数；执行满时按账号池等待或借执行，保留会话绑定。'
+                    : '同一时刻在飞的请求数；满了在本 VM 排队，不切号。'
+                }
                 inheritedText={
                   inherited ? String(inherited.max_concurrency || '不限') : '—'
                 }
@@ -503,6 +533,41 @@ export function VmSchedulingEditor({ vm }: { vm: Vm }) {
                   disabled={pending}
                 />
               </KnobRow>
+              {codex ? (
+                <KnobRow
+                  label='会话容量'
+                  desc='每个 OpenAI 账号同时保留的活跃对话窗口；0 表示不限。'
+                  inheritedText={
+                    inherited ? String(inherited.max_sessions || '不限') : '—'
+                  }
+                  own={draft.sessions.own}
+                  onOwnChange={(own) =>
+                    setDraft({ ...draft, sessions: { ...draft.sessions, own } })
+                  }
+                  disabled={pending}
+                >
+                  <ChipGroup
+                    label='会话容量'
+                    value={draft.sessions.value}
+                    options={withCurrent(
+                      [0, 1, 2, 4, 8, 16, 32, 64, 128, 256].map(
+                        (n): [number, string] => [
+                          n,
+                          n === 0 ? '不限' : String(n),
+                        ]
+                      ),
+                      draft.sessions.value
+                    )}
+                    onChange={(value) =>
+                      setDraft({
+                        ...draft,
+                        sessions: { own: true, value },
+                      })
+                    }
+                    disabled={pending}
+                  />
+                </KnobRow>
+              ) : null}
               <KnobRow
                 label='RPM 上限'
                 desc='每分钟请求数；满了排队等窗口，不切号。'
@@ -525,34 +590,36 @@ export function VmSchedulingEditor({ vm }: { vm: Vm }) {
                   disabled={pending}
                 />
               </KnobRow>
-              <div className='space-y-2 rounded-lg border p-3'>
-                <div className='space-y-0.5'>
-                  <Label>调度等级</Label>
-                  <p className='text-[11px] leading-4 text-muted-foreground'>
-                    等级高的 VM 先开新席位，同等级才看开席策略。自动 = 按 7D
-                    重置倒计时算（1–7）；手动 1–10。
-                  </p>
+              {!codex ? (
+                <div className='space-y-2 rounded-lg border p-3'>
+                  <div className='space-y-0.5'>
+                    <Label>调度等级</Label>
+                    <p className='text-[11px] leading-4 text-muted-foreground'>
+                      等级高的 VM 先开新席位，同等级才看开席策略。自动 = 按 7D
+                      重置倒计时算（1–7）；手动 1–10。
+                    </p>
+                  </div>
+                  <ChipGroup
+                    label='调度等级'
+                    value={draft.level}
+                    options={[
+                      [
+                        'auto',
+                        vm.schedule_level_mode === 'auto' &&
+                        Number.isInteger(Number(vm.schedule_level))
+                          ? `自动（当前 ${vm.schedule_level}）`
+                          : '自动',
+                      ] as ['auto' | number, string],
+                      ...LEVELS.map((n): ['auto' | number, string] => [
+                        n,
+                        String(n),
+                      ]),
+                    ]}
+                    onChange={(level) => setDraft({ ...draft, level })}
+                    disabled={pending}
+                  />
                 </div>
-                <ChipGroup
-                  label='调度等级'
-                  value={draft.level}
-                  options={[
-                    [
-                      'auto',
-                      vm.schedule_level_mode === 'auto' &&
-                      Number.isInteger(Number(vm.schedule_level))
-                        ? `自动（当前 ${vm.schedule_level}）`
-                        : '自动',
-                    ] as ['auto' | number, string],
-                    ...LEVELS.map((n): ['auto' | number, string] => [
-                      n,
-                      String(n),
-                    ]),
-                  ]}
-                  onChange={(level) => setDraft({ ...draft, level })}
-                  disabled={pending}
-                />
-              </div>
+              ) : null}
             </section>
 
             {codex || !quotaBase ? null : (

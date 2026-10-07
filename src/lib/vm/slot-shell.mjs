@@ -15,6 +15,7 @@ import { slotContainerName } from '../transport/rust-kernel-supervisor.mjs'
 import { slotHost } from './slot-host.mjs'
 import { isCodexVm } from './vm-kind.mjs'
 import { getVm } from './vm-registry.mjs'
+import { OFFICIAL_CLI_VERSION } from '../identity/vm-identity.mjs'
 
 const SHELL_RE = /^\/api\/panel\/vms\/([^/]+)\/shell$/
 const TICKET_TTL_MS = 30_000
@@ -43,7 +44,9 @@ export function panelShellLaunch(cliBin) {
     'export HOME="${HOME:-/home/kincli}"',
     'export CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"',
     // Same credentials.json as the host Refresher; a second refresher here would spend the shared RT.
-    'export CLAUDE_CODE_KIN_HOST_REFRESH=1',
+    `export CLAUDE_CODE_HOST_REFRESH=1`,
+    `export CLAUDE_CODE_VERSION=${OFFICIAL_CLI_VERSION}`,
+    'export USER_TYPE=external',
     'mkdir -p "$CLAUDE_CONFIG_DIR"',
     'if [ -f "$CLAUDE_CONFIG_DIR/credentials.json" ] && [ ! -e "$CLAUDE_CONFIG_DIR/.credentials.json" ]; then ln -s credentials.json "$CLAUDE_CONFIG_DIR/.credentials.json" 2>/dev/null || true; fi',
     'if [ ! -e "$HOME/.claude.json" ] && [ -f "$CLAUDE_CONFIG_DIR/.claude.json" ]; then ln -s .claude/.claude.json "$HOME/.claude.json" 2>/dev/null || true; fi',

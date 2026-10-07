@@ -81,6 +81,7 @@ const CODE_MAP = {
   distill_blocked: 'distill',
   refusal_guard: 'refusal',
   content_filter_refusal: 'refusal',
+  policy_blocked: 'refusal',
 }
 
 export const IGNORED_ERROR_CODES = new Set([
@@ -117,6 +118,7 @@ export const SLA_OK_ERROR_CODES = new Set([
   'distill_blocked',
   'refusal_guard',
   'content_filter_refusal',
+  'policy_blocked',
   // Pool queue full / timeout moved from 429 to 529; SLA keeps counting them as it did at 429.
   'pool_overloaded',
   'pool_wait_queue_full',

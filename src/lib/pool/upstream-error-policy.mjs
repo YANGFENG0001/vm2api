@@ -10,6 +10,7 @@ import {
   isWrapConnectionError,
   ErrorCode,
 } from '../core/errors.mjs'
+import { isContentPolicyErrorCode } from '../core/refusal-guard.mjs'
 import { isPlanLimitMessage, parseLimitResetFromMessage, parseResetMs } from './quota-window.mjs'
 import { attachFailureDecision } from './unit-decision.mjs'
 
@@ -349,6 +350,15 @@ function classifyUpstreamResultRaw(
       retrySameAccount: false,
       rememberRefusal: true,
       refusalTtlMs: 0,
+    }
+  }
+  if (isContentPolicyErrorCode(code) || isContentPolicyErrorCode(workerCode)) {
+    return {
+      scope: 'request',
+      action: 'stop',
+      reason: 'content_policy_refusal',
+      cooldownUntil: null,
+      retrySameAccount: false,
     }
   }
   if (/token has been revoked|oauth_revoked|invalid_grant|authentication_error/i.test(hay) || status === 401) {

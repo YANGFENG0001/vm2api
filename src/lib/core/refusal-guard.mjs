@@ -63,6 +63,24 @@ export function refusalPreview(body = {}, inbound = body) {
     .slice(0, 240)
 }
 
+const CONTENT_POLICY_ERROR_CODES = new Set([
+  'content_policy',
+  'content_filter',
+  'content_filter_refusal',
+  'cyber_policy',
+  'moderation_blocked',
+  'safety_violation',
+  'usage_policy',
+])
+
+export function isContentPolicyErrorCode(code) {
+  return CONTENT_POLICY_ERROR_CODES.has(
+    String(code || '')
+      .trim()
+      .toLowerCase(),
+  )
+}
+
 export function isUpstreamRefusal(result = {}, extra = {}) {
   if (result?.finalState === 'content_filter') return true
   const stop = String(result?.stopReason || result?.body?.stop_reason || extra.stop_reason || '')
@@ -77,7 +95,15 @@ export function isUpstreamRefusal(result = {}, extra = {}) {
     .filter(Boolean)
     .join('\n')
   if (isUsagePolicyErrorMessage(message)) return true
-  return false
+  const codes = [
+    result?.body?.error?.code,
+    result?.body?.code,
+    result?.code,
+    result?.error_code,
+    extra?.error_code,
+    extra?.code,
+  ]
+  return codes.some(isContentPolicyErrorCode)
 }
 
 export function refusalGuardError(requestId) {

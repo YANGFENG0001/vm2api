@@ -139,7 +139,9 @@ def build_argv() -> list[str]:
         "-e", f"LANG={lang}",
         "-e", f"LC_ALL={lang}",
         "-e", "PATH=/home/kincli/.local/bin:/usr/bin:/bin",
-        "-e", "CLAUDE_CODE_KIN_HOST_REFRESH=1",
+        "-e", "CLAUDE_CODE_HOST_REFRESH=1",
+        "-e", f"CLAUDE_CODE_VERSION={os.environ.get('KIN_CLI_VERSION', '2.1.284')}",
+        "-e", "USER_TYPE=external",
         # The slot cli-node guard spares host-run setup-token sessions.
         "-e", "KIN_SETUP_TOKEN=1",
         "-e", "CLAUDE_CODE_USE_BEDROCK=0",

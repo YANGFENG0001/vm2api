@@ -31,7 +31,9 @@ def main() -> int:
         "-e", "PATH=/home/kincli/.local/bin:/usr/bin:/bin",
         # The host Go Refresher is the only RT writer; the marker lets the host
         # find this process apart from the kernel's CLI on the same binary.
-        "-e", "CLAUDE_CODE_KIN_HOST_REFRESH=1",
+        "-e", "CLAUDE_CODE_HOST_REFRESH=1",
+        "-e", f"CLAUDE_CODE_VERSION={os.environ.get('KIN_CLI_VERSION', '2.1.284')}",
+        "-e", "USER_TYPE=external",
         "-e", "KIN_OFFICIAL_CC=1",
         "-e", "CLAUDE_CODE_USE_BEDROCK=0",
         "-e", "CLAUDE_CODE_USE_VERTEX=0",

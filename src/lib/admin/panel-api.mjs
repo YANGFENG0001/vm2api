@@ -50,6 +50,7 @@ import {
   evaluateAccount,
   credStatusFromAvailability,
   isLeftoverQuotaScheduleOff,
+  isQuotaWindowReason,
   resolveScheduleState,
 } from '../pool/availability.mjs'
 import { isLeftoverGrantRevokeRuntime, viewRuntimeWithoutLeftoverRevoke } from '../pool/schedule-eligibility.mjs'
@@ -81,6 +82,8 @@ import {
 import { PERSONA_STANDING_MAX } from '../identity/crs-persona.mjs'
 import { MESSAGES_BREAKPOINT_MODES } from '../protocol/cache-ttl.mjs'
 import { normalizeCodexRouting } from '../protocol/codex-route.mjs'
+import { effectiveOpenAIPolicy, normalizeOpenAIQuotaPolicy } from '../pool/openai-quota-policy.mjs'
+import { openAIRuntimeSignals } from '../pool/openai-account-runtime.mjs'
 
 export function ok(data, meta) {
   const out = { ok: true, data }
@@ -442,7 +445,7 @@ export async function buildDashboard({
   const active = getActiveVmId(cfg.paths.project)
   const pool = poolScheduler?.snapshot?.() || {}
   const poolSnap = snapshotPool(proxyPool)
-  const listed = listVms(cfg.paths.project)
+  const listed = listVms(cfg.paths.project, routingConfig)
   const liveById = await collectLivePanelCredentials(cfg.paths.project, listed)
   const vms = listed.map((v) =>
     enrichVm(v, accountQuota, active, {
@@ -567,7 +570,7 @@ export async function buildVmList({
   const active = getActiveVmId(cfg.paths.project)
   const pool = poolScheduler?.snapshot?.() || {}
   const poolSnap = snapshotPool(proxyPool)
-  const listed = filterVmsForPanel(listVms(cfg.paths.project), { role, userId: ownerUserId })
+  const listed = filterVmsForPanel(listVms(cfg.paths.project, routingConfig), { role, userId: ownerUserId })
   const liveById = await collectLivePanelCredentials(cfg.paths.project, listed)
   const vms = listed.map((v) =>
     enrichVm(v, accountQuota, active, {
@@ -632,7 +635,7 @@ export async function buildVmDetail({
   const active = getActiveVmId(cfg.paths.project)
   const pool = poolScheduler?.snapshot?.() || {}
   const poolSnap = snapshotPool(proxyPool)
-  const listed = [summarizeVm(vm)]
+  const listed = [summarizeVm(vm, cfg.paths.project, routingConfig)]
   const liveById = await collectLivePanelCredentials(cfg.paths.project, listed, { cacheMs: 0 })
   const summary = enrichVm(listed[0], accountQuota, active, {
     routingConfig,
@@ -768,8 +771,13 @@ function gptQuotaFail(result) {
   )
 }
 
-export async function buildOpenaiQuotaRefresh({ cfg, id, rotate = true } = {}) {
-  const result = await queryOpenaiQuota({ projectRoot: cfg.paths.project, vmId: id, rotate })
+export async function buildOpenaiQuotaRefresh({ cfg, id, rotate = true, routingConfig = {} } = {}) {
+  const result = await queryOpenaiQuota({
+    projectRoot: cfg.paths.project,
+    vmId: id,
+    rotate,
+    policy: normalizeCodexRouting(routingConfig.codex).quota,
+  })
   if (!result.ok) return gptQuotaFail(result)
   return ok({
     vm_id: id,
@@ -778,8 +786,13 @@ export async function buildOpenaiQuotaRefresh({ cfg, id, rotate = true } = {}) {
   })
 }
 
-export async function buildOpenaiQuotaReset({ cfg, id, rotate = true } = {}) {
-  const result = await resetOpenaiQuota({ projectRoot: cfg.paths.project, vmId: id, rotate })
+export async function buildOpenaiQuotaReset({ cfg, id, rotate = true, routingConfig = {} } = {}) {
+  const result = await resetOpenaiQuota({
+    projectRoot: cfg.paths.project,
+    vmId: id,
+    rotate,
+    policy: normalizeCodexRouting(routingConfig.codex).quota,
+  })
   if (!result.ok) return gptQuotaFail(result)
   return ok({
     vm_id: id,
@@ -878,6 +891,7 @@ export async function buildProbeOne({
   usageCache = null,
   hop = true,
   fableProbe = probeFableEntitlement,
+  routingConfig = {},
 } = {}) {
   const vm = getVm(cfg.paths.project, id)
   if (!vm) {
@@ -891,7 +905,12 @@ export async function buildProbeOne({
     )
   }
   if (isCodexVm(vm)) {
-    const result = await queryOpenaiQuota({ projectRoot: cfg.paths.project, vmId: id, rotate: true })
+    const result = await queryOpenaiQuota({
+      projectRoot: cfg.paths.project,
+      vmId: id,
+      rotate: true,
+      policy: normalizeCodexRouting(routingConfig.codex).quota,
+    })
     if (!result.ok) return gptQuotaFail(result)
     return ok({
       vm_id: id,
@@ -1110,11 +1129,11 @@ export async function buildProbeOne({
   return ok(data)
 }
 
-export async function buildProbeAll({ cfg, accountQuota, hop = true, force = true } = {}) {
-  const vms = listVms(cfg.paths.project)
+export async function buildProbeAll({ cfg, accountQuota, hop = true, force = true, routingConfig = {} } = {}) {
+  const vms = listVms(cfg.paths.project, routingConfig)
   const items = []
   for (const s of vms) {
-    const one = await buildProbeOne({ cfg, accountQuota, id: s.id, hop, force })
+    const one = await buildProbeOne({ cfg, accountQuota, id: s.id, hop, force, routingConfig })
     if (one.ok === false || one.status) {
       const err = one.body?.error || one
       items.push({ vm_id: s.id, ok: false, error: err?.message || err?.code || String(err || 'probe_failed') })
@@ -1249,7 +1268,7 @@ export async function snapshotAccountPool({
   const active = getActiveVmId(cfg.paths.project)
   const pool = poolScheduler?.snapshot?.() || {}
   const poolSnap = snapshotPool(proxyPool)
-  const listed = listVms(cfg.paths.project)
+  const listed = listVms(cfg.paths.project, routingConfig)
   let liveById = null
   try {
     liveById = await collectLivePanelCredentials(cfg.paths.project, listed)
@@ -1527,7 +1546,13 @@ function enrichVm(v, accountQuota, active, extras = {}) {
     unified: acc?.unified || {},
   })
   const isCodex = isCodexVm(v)
-  const mergedQuota = isCodex && v.codex_usage?.quota ? { ...q, ...v.codex_usage.quota } : q
+  // OpenAI quota mirrors are observations; admission uses the current raw windows and policy.
+  if (isCodex && isQuotaWindowReason(v.temp_unschedulable_reason)) {
+    v = { ...v, temp_unschedulable_until: null, temp_unschedulable_reason: null }
+  }
+  const openAIGlobalPolicy = normalizeOpenAIQuotaPolicy(extras.routingConfig?.codex?.quota)
+  const openAIEffective = isCodex ? effectiveOpenAIPolicy(v, openAIGlobalPolicy) : null
+  const mergedQuota = isCodex ? v.codex_usage?.quota || {} : q
   const u5 = mergedQuota.utilization_5h
   const u7 = mergedQuota.utilization_7d
   const merged = mergeVmProxy(v, extras.poolSnap || null)
@@ -1547,21 +1572,27 @@ function enrichVm(v, accountQuota, active, extras = {}) {
         },
         q,
       ).key
-  const inheritedPolicy = resolveTierPolicy(
-    {
-      tiers: extras.routingConfig?.tiers || accountQuota?.tiers,
-      quota: globalQuotaConfig,
-      concurrency: extras.routingConfig?.concurrency || accountQuota?.concurrency,
-    },
-    tierKey,
-  )
-  const policy = applyVmQuotaPolicy(inheritedPolicy, quotaOverride)
+  const inheritedPolicy = isCodex
+    ? {
+        max_concurrency: openAIGlobalPolicy.max_concurrency,
+        max_rpm: openAIGlobalPolicy.max_rpm,
+        max_sessions: openAIGlobalPolicy.max_sessions,
+      }
+    : resolveTierPolicy(
+        {
+          tiers: extras.routingConfig?.tiers || accountQuota?.tiers,
+          quota: globalQuotaConfig,
+          concurrency: extras.routingConfig?.concurrency || accountQuota?.concurrency,
+        },
+        tierKey,
+      )
+  const policy = isCodex ? openAIGlobalPolicy : applyVmQuotaPolicy(inheritedPolicy, quotaOverride)
   const safety = Number(policy.limit_5h ?? policy.safety_ratio ?? 0.85)
   const weeklySafety = Number(policy.limit_7d ?? policy.weekly_safety_ratio ?? 0.8)
   // Codex keeps its own conversation window (vm max_sessions); Claude rows report planner seats.
   const codexSessions = isCodex
     ? accountQuota?.sessions?.snapshot?.(acc?.account_id || v.account_uuid || v.id, {
-        max: codexMaxSessions(v),
+        max: openAIEffective.max_sessions,
         idleMin: 5,
       }) || { active: 0, max: codexMaxSessions(v), idle_min: 5 }
     : null
@@ -1569,7 +1600,7 @@ function enrichVm(v, accountQuota, active, extras = {}) {
   const liveHardBlock = hardBlockOf(runtime)
   const availability = evaluateAccount({
     vm: v,
-    account: acc || {},
+    account: isCodex ? {} : acc || {},
     hasToken,
     hasRefresh: !!(v.has_refresh || workerCred?.has_refresh),
     schedulable: v.schedulable !== false,
@@ -1581,7 +1612,7 @@ function enrichVm(v, accountQuota, active, extras = {}) {
     expiresAt,
     refreshedAt: v.refreshed_at || v.claude?.refreshed_at || null,
     workerCredential: workerCred,
-    quota: mergedQuota,
+    quota: isCodex ? {} : mergedQuota,
     policy,
     hardBlock: liveHardBlock,
     cooldownUntil:
@@ -1597,6 +1628,18 @@ function enrichVm(v, accountQuota, active, extras = {}) {
       v.cooldown_reason ||
       null,
   })
+  if (isCodex && v.quota_policy?.reason && (availability.accept || availability.key === 'quota')) {
+    const window = v.quota_policy.reason.includes('5h') ? '5h' : '7d'
+    Object.assign(availability, {
+      key: 'quota',
+      text: `${window} 限制`,
+      accept: false,
+      usable: true,
+      reason: v.quota_policy.reason,
+      window,
+      until: v.quota_policy.restricted_until,
+    })
+  }
   const restrictionUntil =
     liveHardBlock?.until ||
     runtime?.cooldown_until ||
@@ -1659,22 +1702,28 @@ function enrichVm(v, accountQuota, active, extras = {}) {
     can_import_credential: merged.can_import_credential,
     proxy_cli_enabled: !!v.proxy_cli_enabled,
     seed_policy: v.seed_policy || null,
-    max_concurrency: v.max_concurrency,
-    max_rpm: acc?.max_rpm ?? v.max_rpm ?? 0,
-    concurrency_override: !!(acc?.concurrency_override || v.max_concurrency_override),
-    rpm_override: !!(acc?.rpm_override || v.max_rpm_override),
+    max_concurrency: isCodex ? openAIEffective.max_concurrency : v.max_concurrency,
+    max_rpm: isCodex ? openAIEffective.max_rpm : (acc?.max_rpm ?? v.max_rpm ?? 0),
+    max_sessions: isCodex ? openAIEffective.max_sessions : null,
+    concurrency_override: isCodex
+      ? openAIEffective.concurrency_override
+      : !!(acc?.concurrency_override || v.max_concurrency_override),
+    rpm_override: isCodex ? openAIEffective.rpm_override : !!(acc?.rpm_override || v.max_rpm_override),
+    max_sessions_override: isCodex ? openAIEffective.sessions_override : false,
     session_slots: isCodex ? null : resolveSessionSlots(v, extras.routingConfig || {}),
     session_slots_override: isCodex ? false : v.session_slots_override === true,
     // What each knob falls back to when the slot drops its pin (PATCH field = null).
     scheduling_inherited: {
       max_concurrency: Number(inheritedPolicy.max_concurrency ?? 2),
       max_rpm: Number(inheritedPolicy.max_rpm ?? 0),
+      max_sessions: isCodex ? Number(inheritedPolicy.max_sessions ?? 0) : null,
       session_slots: isCodex ? null : normalizeSessionSlots(extras.routingConfig?.inference?.session_slots),
     },
     quota_override: quotaOverride,
     quota_policy: isCodex ? null : vmQuotaView(policy, vmQuotaConfig),
     quota_inherited: isCodex ? null : vmQuotaView(inheritedPolicy, globalQuotaConfig),
-    rpm: acc?.rpm ?? 0,
+    openai_quota_policy: isCodex ? v.quota_policy || null : null,
+    rpm: isCodex ? openAIRuntimeSignals(v.id).rpmCount : (acc?.rpm ?? 0),
     allowed_models: Array.isArray(v.allowed_models) ? v.allowed_models : null,
     weight: v.weight ?? 1,
     schedule_level: scheduleLevel.level,
@@ -1749,7 +1798,7 @@ function enrichVm(v, accountQuota, active, extras = {}) {
     seats_grace: isCodex ? null : Number(seatRow?.seats_grace) || 0,
     queue_depth: isCodex ? null : Number(seatRow?.queue_depth) || 0,
     conc_waiting: isCodex ? null : Number(seatRow?.conc_waiting) || 0,
-    inflight: acc?.inflight ?? 0,
+    inflight: isCodex ? openAIRuntimeSignals(v.id).inFlight : (acc?.inflight ?? 0),
     requests: acc?.requests ?? v.stats?.requests ?? 0,
     tokens_in: acc?.tokens_in ?? 0,
     tokens_out: acc?.tokens_out ?? 0,

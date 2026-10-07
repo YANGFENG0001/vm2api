@@ -118,8 +118,10 @@ test('docker args use hello//usage bypassPermissions without CONNECT proxy', () 
     false,
   )
   assert.ok(args.includes('ANTHROPIC_BASE_URL='))
-  // Bootstrap must not race the host Go Refresher for the slot RT.
-  assert.ok(args.includes('CLAUDE_CODE_KIN_HOST_REFRESH=1'))
+  // Bootstrap must not race the host Go Refresher. cli-node reads this name.
+  assert.ok(args.includes('CLAUDE_CODE_HOST_REFRESH=1'))
+  assert.ok(args.includes('CLAUDE_CODE_VERSION=2.1.284'))
+  assert.ok(args.includes('USER_TYPE=external'))
   assert.equal(args[args.indexOf('kin-30') + 1], '/home/kincli/.kin/cli-node')
   assert.ok(!args.some((item) => String(item).includes('8787')))
   const usageArgs = buildOfficialCcDockerArgs({

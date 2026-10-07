@@ -11,6 +11,7 @@ import { containerName } from '../vm/vm-runtime.mjs'
 import { AUTH_SCHEME_BEARER } from './auth-scheme.mjs'
 import { officialCcUidGid, officialCcHome, officialCcHostCli } from './official-cc-bootstrap.mjs'
 import { CONTAINER_CLI_NODE_BIN } from '../vm/slot-engine.mjs'
+import { OFFICIAL_CLI_VERSION } from '../identity/vm-identity.mjs'
 
 export const SETUP_TOKEN_SESSION_TTL_MS = 30 * 60 * 1000
 export const SETUP_TOKEN_SOURCE = 'claude-setup-token'
@@ -281,6 +282,7 @@ export async function startClaudeSetupTokenSession({ vm, projectRoot, force = fa
       KIN_UID: String(ids.uid),
       KIN_GID: String(ids.gid),
       KIN_CLI_BIN: CONTAINER_CLI_NODE_BIN,
+      KIN_CLI_VERSION: OFFICIAL_CLI_VERSION,
       KIN_SESSION_DIR: dir,
       KIN_SESSION_ID: sessionId,
       KIN_VM_ID: vmId,

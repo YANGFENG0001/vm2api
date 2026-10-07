@@ -137,6 +137,8 @@ export type VmPatch = {
   /** null = 去掉本槽覆盖，跟随分档 / 全局。 */
   max_concurrency?: number | null
   max_rpm?: number | null
+  /** OpenAI only; null clears the pin and follows codex.quota.max_sessions. */
+  max_sessions?: number | null
   session_slots?: number | null
   quota_override?: VmQuotaOverride | null
   allowed_models?: string[]

@@ -84,6 +84,15 @@
     "fallback_to_go": false,
     "session_slots": 20
   },
+  "codex": {
+    "quota": {
+      "limit_5h": 1,
+      "limit_7d": 1,
+      "max_concurrency": 2,
+      "max_rpm": 0,
+      "max_sessions": 0
+    }
+  },
 
   "compatibility": {
     "persona_preset": "official_full",

@@ -4,11 +4,19 @@ import type { RefusalGuardConfig } from '@/types/panel-routing'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { fmtExpiresAt } from '@/lib/format'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { SettingRow } from '@/components/setting-row'
+import { Group } from '@/features/protocol/blocks'
 import { refusalGuardsQueryOptions } from '@/features/protocol/queries'
 
 const SIMILARITY_CHOICES = [80, 85, 90, 95] as const
@@ -124,153 +132,175 @@ export function RefusalGuardCard() {
 
   return (
     <Card>
-      <CardHeader className='flex flex-row items-center justify-between gap-3'>
+      <CardHeader className='border-b'>
         <CardTitle>拒答缓存</CardTitle>
-        <Button
-          size='sm'
-          variant='outline'
-          disabled={!data.count || clear.isPending}
-          onClick={() => setClearOpen(true)}
-        >
-          清空指纹
-        </Button>
+        <CardDescription>
+          精确指纹命中后直接 503。近似只比较用户正文，短于 512 字不做。
+        </CardDescription>
+        <div className='flex flex-wrap items-center gap-2'>
+          <Badge variant={data.enabled ? 'secondary' : 'outline'}>
+            {data.enabled ? '开' : '关'}
+          </Badge>
+          <Badge variant='outline'>{data.count} 条指纹</Badge>
+          <Badge variant='outline'>{deviceCount} 个 device</Badge>
+          <Button
+            size='sm'
+            variant='outline'
+            className='ms-auto cursor-pointer'
+            disabled={!data.count || clear.isPending}
+            onClick={() => setClearOpen(true)}
+          >
+            清空指纹
+          </Button>
+        </div>
       </CardHeader>
-      <CardContent className='divide-y'>
-        <SettingRow
-          label='拦截重复拒答'
-          desc='精确指纹命中后直接 503，不再 hop。环境变量 REFUSAL_GUARD=0 会关掉整条守卫，包括近似和 device 封禁'
-        >
-          <Switch
-            checked={data.enabled}
-            disabled={save.isPending}
-            onCheckedChange={(v) => save.mutate({ enabled: v })}
-          />
-        </SettingRow>
-        <SettingRow
-          label='近似拦截'
-          desc='只比较用户正文，不含共享 system。达到所选相似度就拦。短于 512 字不做近似'
-        >
-          <Switch
-            checked={data.similarity_enabled !== false}
-            disabled={save.isPending || !data.enabled}
-            onCheckedChange={(v) => save.mutate({ similarity_enabled: v })}
-          />
-        </SettingRow>
-        <div className='flex flex-wrap items-center gap-2 py-3'>
-          <span className='text-sm'>相似度</span>
-          {SIMILARITY_CHOICES.map((choice) => (
-            <Button
-              key={choice}
-              size='sm'
-              variant={similarity === choice ? 'default' : 'outline'}
-              disabled={
-                save.isPending ||
-                !data.enabled ||
-                data.similarity_enabled === false
-              }
-              onClick={() => save.mutate({ similarity: choice })}
-            >
-              {choice}%
-            </Button>
-          ))}
-        </div>
-        <SettingRow
-          label='封禁 device'
-          desc='拒答命中后永久封禁该入站 device id。之后这个 device 的任意 prompt 都不再 hop'
-        >
-          <Switch
-            checked={data.device_block_enabled !== false}
-            disabled={save.isPending || !data.enabled}
-            onCheckedChange={(v) => save.mutate({ device_block_enabled: v })}
-          />
-        </SettingRow>
-        <div className='space-y-2 py-3'>
-          <div className='flex items-center justify-between gap-2'>
-            <p className='text-sm'>
-              已封禁 {deviceCount} 个 device
-              {devices.length < deviceCount
-                ? `，显示最近 ${devices.length} 个`
-                : ''}
-            </p>
-            <Button
-              size='sm'
-              variant='outline'
-              disabled={!deviceCount || clearDevices.isPending}
-              onClick={() => setClearDevicesOpen(true)}
-            >
-              全部解除
-            </Button>
+      <CardContent className='space-y-6'>
+        <Group title='策略'>
+          <div className='grid gap-3 lg:grid-cols-2'>
+            <div className='rounded-lg border px-3'>
+              <SettingRow
+                label='拦截重复拒答'
+                desc='REFUSAL_GUARD=0 会关掉整条守卫'
+              >
+                <Switch
+                  checked={data.enabled}
+                  disabled={save.isPending}
+                  onCheckedChange={(v) => save.mutate({ enabled: v })}
+                />
+              </SettingRow>
+            </div>
+            <div className='rounded-lg border px-3'>
+              <SettingRow label='近似拦截' desc='不含共享 system'>
+                <Switch
+                  checked={data.similarity_enabled !== false}
+                  disabled={save.isPending || !data.enabled}
+                  onCheckedChange={(v) =>
+                    save.mutate({ similarity_enabled: v })
+                  }
+                />
+              </SettingRow>
+            </div>
+            <div className='rounded-lg border px-3 lg:col-span-2'>
+              <SettingRow
+                label='封禁 device'
+                desc='命中后这个 device 的任意 prompt 都不再 hop'
+              >
+                <Switch
+                  checked={data.device_block_enabled !== false}
+                  disabled={save.isPending || !data.enabled}
+                  onCheckedChange={(v) =>
+                    save.mutate({ device_block_enabled: v })
+                  }
+                />
+              </SettingRow>
+            </div>
           </div>
-          {!devices.length ? (
-            <p className='text-xs text-muted-foreground'>
-              还没有被封禁的 device。
-            </p>
-          ) : (
-            <ul className='space-y-2'>
-              {devices.map((item) => (
-                <li
-                  key={item.device_id}
-                  className='flex flex-wrap items-start justify-between gap-2 rounded-md border p-2'
-                >
-                  <div className='min-w-0 flex-1 space-y-0.5'>
-                    <p className='truncate font-mono text-sm'>
-                      {item.device_id}
-                    </p>
-                    <p className='text-xs text-muted-foreground'>
-                      {item.reason || 'refusal_guard'} · 命中 {item.hit_count} ·{' '}
-                      {fmtExpiresAt(item.last_seen_at)}
-                    </p>
-                  </div>
-                  <Button
-                    size='sm'
-                    variant='ghost'
-                    onClick={() => setUnblockId(item.device_id)}
+          <div className='flex flex-wrap items-center gap-2'>
+            <span className='text-sm'>相似度</span>
+            {SIMILARITY_CHOICES.map((choice) => (
+              <Button
+                key={choice}
+                size='sm'
+                className='cursor-pointer'
+                variant={similarity === choice ? 'default' : 'outline'}
+                disabled={
+                  save.isPending ||
+                  !data.enabled ||
+                  data.similarity_enabled === false
+                }
+                onClick={() => save.mutate({ similarity: choice })}
+              >
+                {choice}%
+              </Button>
+            ))}
+          </div>
+        </Group>
+        <div className='grid gap-4 lg:grid-cols-2'>
+          <Group title='已封禁 device'>
+            <div className='flex items-center justify-between gap-2'>
+              <p className='text-xs text-muted-foreground'>
+                {deviceCount
+                  ? devices.length < deviceCount
+                    ? `显示最近 ${devices.length} / ${deviceCount}`
+                    : `${deviceCount} 个`
+                  : '还没有'}
+              </p>
+              <Button
+                size='sm'
+                variant='outline'
+                className='cursor-pointer'
+                disabled={!deviceCount || clearDevices.isPending}
+                onClick={() => setClearDevicesOpen(true)}
+              >
+                全部解除
+              </Button>
+            </div>
+            {devices.length ? (
+              <ul className='max-h-80 space-y-2 overflow-y-auto'>
+                {devices.map((item) => (
+                  <li
+                    key={item.device_id}
+                    className='flex items-start justify-between gap-2 rounded-lg border p-2'
                   >
-                    解除
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-        <div className='space-y-2 py-3'>
-          <p className='text-sm'>
-            已缓存 {data.count} 条指纹
-            {data.items.length < data.count
-              ? `，显示最近 ${data.items.length} 条`
-              : ''}
-          </p>
-          {!data.items.length ? (
+                    <div className='min-w-0 flex-1 space-y-0.5'>
+                      <p className='truncate font-mono text-sm'>
+                        {item.device_id}
+                      </p>
+                      <p className='text-xs text-muted-foreground'>
+                        {item.reason || 'refusal_guard'} · 命中 {item.hit_count}{' '}
+                        · {fmtExpiresAt(item.last_seen_at)}
+                      </p>
+                    </div>
+                    <Button
+                      size='sm'
+                      variant='ghost'
+                      className='cursor-pointer'
+                      onClick={() => setUnblockId(item.device_id)}
+                    >
+                      解除
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </Group>
+          <Group title='指纹'>
             <p className='text-xs text-muted-foreground'>
-              还没有上游拒答指纹。
+              {data.count
+                ? data.items.length < data.count
+                  ? `显示最近 ${data.items.length} / ${data.count}`
+                  : `${data.count} 条`
+                : '还没有上游拒答'}
             </p>
-          ) : (
-            <ul className='space-y-2'>
-              {data.items.map((item) => (
-                <li
-                  key={item.fingerprint}
-                  className='flex flex-wrap items-start justify-between gap-2 rounded-md border p-2'
-                >
-                  <div className='min-w-0 flex-1 space-y-0.5'>
-                    <p className='truncate text-sm'>
-                      {item.preview || '（无预览）'}
-                    </p>
-                    <p className='font-mono text-xs text-muted-foreground'>
-                      {item.model || '—'} · {shortFp(item.fingerprint)} · 命中{' '}
-                      {item.hit_count} · {fmtExpiresAt(item.last_seen_at)}
-                    </p>
-                  </div>
-                  <Button
-                    size='sm'
-                    variant='ghost'
-                    onClick={() => setDeleteFp(item.fingerprint)}
+            {data.items.length ? (
+              <ul className='max-h-80 space-y-2 overflow-y-auto'>
+                {data.items.map((item) => (
+                  <li
+                    key={item.fingerprint}
+                    className='flex items-start justify-between gap-2 rounded-lg border p-2'
                   >
-                    删除
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          )}
+                    <div className='min-w-0 flex-1 space-y-0.5'>
+                      <p className='truncate text-sm'>
+                        {item.preview || '（无预览）'}
+                      </p>
+                      <p className='font-mono text-xs text-muted-foreground'>
+                        {item.model || '—'} · {shortFp(item.fingerprint)} · 命中{' '}
+                        {item.hit_count} · {fmtExpiresAt(item.last_seen_at)}
+                      </p>
+                    </div>
+                    <Button
+                      size='sm'
+                      variant='ghost'
+                      className='cursor-pointer'
+                      onClick={() => setDeleteFp(item.fingerprint)}
+                    >
+                      删除
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </Group>
         </div>
       </CardContent>
       <ConfirmDialog

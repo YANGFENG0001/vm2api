@@ -225,10 +225,13 @@ export type Vm = {
   active?: boolean
   max_concurrency?: number
   max_rpm?: number
-  /** true = 本槽钉住了并发；false = 跟随分档（分档保存时会被改写）。 */
+  /** OpenAI conversation-window cap; 0 means unlimited. */
+  max_sessions?: number | null
+  /** true = 本槽钉住并发；false = 跟随本平台全局默认。 */
   concurrency_override?: boolean
-  /** true = 本槽钉住了 RPM；false = 跟随分档。 */
+  /** true = 本槽钉住 RPM；false = 跟随本平台全局默认。 */
   rpm_override?: boolean
+  max_sessions_override?: boolean
   /** Claude CLI native 执行位热准入上限，也是预调度的席位上限；内核固定预开 20。 */
   session_slots?: number | null
   session_slots_override?: boolean
@@ -240,6 +243,16 @@ export type Vm = {
   quota_policy?: VmQuotaView | null
   /** 不含覆盖、按全局分档算出的配额，供「跟随全局」展示。 */
   quota_inherited?: VmQuotaView | null
+  /** OpenAI 的生效额度与限制原因；不包含 Claude 分档/weekly split。 */
+  openai_quota_policy?:
+    | (OpenAIQuotaPolicy & {
+        reason: string | null
+        restricted_until: number | null
+        concurrency_override: boolean
+        rpm_override: boolean
+        sessions_override: boolean
+      })
+    | null
   /** 当前有效调度等级；自动模式范围 1～7，手动模式范围 1～10。 */
   schedule_level?: number
   /** 调度等级来源；缺失时按自动模式展示。 */
@@ -501,8 +514,18 @@ export type VmQuotaOverride = Partial<VmQuotaView>
 export type VmSchedulingInherited = {
   max_concurrency: number
   max_rpm: number
+  /** OpenAI only; 0 means unlimited. */
+  max_sessions?: number | null
   /** Codex 行为 null。 */
   session_slots: number | null
+}
+
+export type OpenAIQuotaPolicy = {
+  limit_5h: number
+  limit_7d: number
+  max_concurrency: number
+  max_rpm: number
+  max_sessions: number
 }
 
 export type QuotaTierKey = 'default' | 'pro' | 'max'
