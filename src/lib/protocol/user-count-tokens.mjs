@@ -4,8 +4,14 @@
  */
 import { makeError, mapUpstreamError, rewritePoolErrorForClient, ErrorType, ErrorCode } from '../core/errors.mjs'
 import { detectDistill, distillBlockError } from '../core/distill-detect.mjs'
-import { isRefusalGuardEnabled, refusalFingerprint, refusalGuardError } from '../core/refusal-guard.mjs'
+import {
+  inboundRefusalDeviceId,
+  matchStoredRefusal,
+  refusalGuardError,
+  refusalGuardPolicy,
+} from '../core/refusal-guard.mjs'
 import { RefusalGuardsRepo } from '../db/repos/refusal-guards-repo.mjs'
+import { RefusalDeviceBlocksRepo } from '../db/repos/refusal-device-blocks-repo.mjs'
 import { SettingsRepo } from '../db/repos/settings-repo.mjs'
 import { readRoutingConfigFile } from '../core/config.mjs'
 import {
@@ -149,12 +155,12 @@ function distillContext(req, inbound) {
   return { official, zeroInject: inject === 'zero' || preset === 'zero' }
 }
 
-function refusalEnabled(deps) {
+function refusalPolicy(deps) {
   try {
     const settings = deps.settings || new SettingsRepo()
-    return isRefusalGuardEnabled((key, fallback) => settings.get(key, fallback))
+    return refusalGuardPolicy((key, fallback) => settings.get(key, fallback))
   } catch {
-    return isRefusalGuardEnabled()
+    return refusalGuardPolicy()
   }
 }
 
@@ -171,13 +177,36 @@ function refusalRepo(deps) {
 export function blockCountTokensBeforeHop(req, inbound, deps = {}) {
   const hit = detectDistill({ inbound, body: inbound, ...distillContext(req, inbound) }, deps.cfg?.distill)
   if (hit.action === 'block') return distillBlockError(deps.cfg?.distill)
-  if (!refusalEnabled(deps)) return null
+  const policy = refusalPolicy(deps)
+  if (!policy.enabled) return null
   const repo = refusalRepo(deps)
   if (!repo) return null
-  const row = repo.get(refusalFingerprint(inbound, inbound))
-  if (!row) return null
+  const devices = deps.refusalDevices || null
+  const match = matchStoredRefusal({
+    inbound,
+    body: inbound,
+    headers: req?.headers,
+    repo,
+    devices,
+    similarityEnabled: policy.similarity_enabled,
+    similarity: policy.similarity / 100,
+    deviceBlockEnabled: policy.device_block_enabled,
+  })
+  if (!match) return null
   try {
-    repo.hit(row.fingerprint)
+    if (match.kind === 'device') devices?.hit?.(match.deviceId)
+    else {
+      repo.hit?.(match.fingerprint)
+      const deviceId = match.deviceId || inboundRefusalDeviceId({ inbound, headers: req?.headers })
+      if (policy.device_block_enabled && deviceId) {
+        const blocks = devices || new RefusalDeviceBlocksRepo()
+        blocks.block?.({
+          deviceId,
+          fingerprint: match.fingerprint,
+          reason: match.kind === 'similar' ? 'refusal_similar' : 'refusal_guard',
+        })
+      }
+    }
   } catch {
     /* counter is best-effort; the response still must not hop */
   }

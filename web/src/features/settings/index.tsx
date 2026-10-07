@@ -19,11 +19,8 @@ import {
 } from '@/lib/persona-template'
 import { cn } from '@/lib/utils'
 import { isCodexVm } from '@/lib/vm-kind'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Switch } from '@/components/ui/switch'
 import { PageHeader } from '@/components/page-header'
 import { QueryGate } from '@/components/query-gate'
-import { SettingRow } from '@/components/setting-row'
 import { dashboardQueryOptions } from '@/features/overview/queries'
 import { AboutPane } from '@/features/settings/about-pane'
 import { BackupPane } from '@/features/settings/backup-pane'
@@ -217,105 +214,47 @@ export function SettingsPage() {
                 />
               ) : null}
               {tab === 'pool' ? (
-                <div className='space-y-3'>
+                <div className='space-y-4'>
                   <PoolPane
                     pool={pool}
                     failover={failover}
+                    inference={inference}
                     onPoolChange={(next) => setDraft({ ...draft, pool: next })}
                     onFailoverChange={(next) =>
                       setDraft({ ...draft, failover: next })
+                    }
+                    onInferenceChange={(next) =>
+                      setDraft({ ...draft, inference: next })
                     }
                   />
                   <CredentialWeightPane />
                 </div>
               ) : null}
               {tab === 'quota' ? (
-                <div className='space-y-3'>
-                  <QuotaTierPane
-                    tiers={
-                      (draft.tiers as
-                        Record<string, QuotaTierPolicy> | undefined) || {}
-                    }
-                    defaultRpm={
-                      Number(
-                        (
-                          draft.concurrency as
-                            Record<string, unknown> | undefined
-                        )?.default_max_rpm
-                      ) || 0
-                    }
-                    onChange={(tier, next) =>
-                      setDraft({
-                        ...draft,
-                        tiers: {
-                          ...((draft.tiers as Record<
-                            string,
-                            QuotaTierPolicy
-                          >) || {}),
-                          [tier]: next,
-                        },
-                      })
-                    }
-                  />
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>配额</CardTitle>
-                    </CardHeader>
-                    <CardContent className='divide-y'>
-                      <SettingRow
-                        label='5h 打满阻断'
-                        desc='过闸写入受限并切号，不拨调度关'
-                      >
-                        <Switch
-                          checked={quota.block_on_5h !== false}
-                          onCheckedChange={(on) =>
-                            setDraft({
-                              ...draft,
-                              quota: { ...quota, block_on_5h: on },
-                            })
-                          }
-                        />
-                      </SettingRow>
-                      <SettingRow
-                        label='7d 打满阻断'
-                        desc='过闸写入受限并切号，不拨调度关'
-                      >
-                        <Switch
-                          checked={quota.block_on_7d !== false}
-                          onCheckedChange={(on) =>
-                            setDraft({
-                              ...draft,
-                              quota: { ...quota, block_on_7d: on },
-                            })
-                          }
-                        />
-                      </SettingRow>
-                      <SettingRow label='周仓拆分'>
-                        <Switch
-                          checked={
-                            !!(
-                              quota.weekly_split as
-                                Record<string, unknown> | undefined
-                            )?.enabled
-                          }
-                          onCheckedChange={(on) =>
-                            setDraft({
-                              ...draft,
-                              quota: {
-                                ...quota,
-                                weekly_split: {
-                                  ...((quota.weekly_split as object) || {}),
-                                  enabled: on,
-                                  fable_share: 0.5,
-                                },
-                              },
-                            })
-                          }
-                        />
-                      </SettingRow>
-                    </CardContent>
-                  </Card>
-                </div>
+                <QuotaTierPane
+                  tiers={
+                    (draft.tiers as
+                      Record<string, QuotaTierPolicy> | undefined) || {}
+                  }
+                  defaultRpm={
+                    Number(
+                      (draft.concurrency as Record<string, unknown> | undefined)
+                        ?.default_max_rpm
+                    ) || 0
+                  }
+                  quota={quota}
+                  onChange={(tier, next) =>
+                    setDraft({
+                      ...draft,
+                      tiers: {
+                        ...((draft.tiers as Record<string, QuotaTierPolicy>) ||
+                          {}),
+                        [tier]: next,
+                      },
+                    })
+                  }
+                  onQuotaChange={(next) => setDraft({ ...draft, quota: next })}
+                />
               ) : null}
               {tab === 'logs' ? (
                 <LogsPane

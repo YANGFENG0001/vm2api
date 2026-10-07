@@ -23,6 +23,7 @@ import { clearRecoverableVmCooldown, markVmRefreshError } from '../oauth/oauth-c
 import {
   resolveInferenceEngine,
   resolveKernelDataplane,
+  normalizeSessionSlots,
   resolveSessionSlots,
   resolveSlotPersonaPreset,
 } from '../vm/slot-engine.mjs'
@@ -1660,8 +1661,16 @@ function enrichVm(v, accountQuota, active, extras = {}) {
     seed_policy: v.seed_policy || null,
     max_concurrency: v.max_concurrency,
     max_rpm: acc?.max_rpm ?? v.max_rpm ?? 0,
+    concurrency_override: !!(acc?.concurrency_override || v.max_concurrency_override),
+    rpm_override: !!(acc?.rpm_override || v.max_rpm_override),
     session_slots: isCodex ? null : resolveSessionSlots(v, extras.routingConfig || {}),
     session_slots_override: isCodex ? false : v.session_slots_override === true,
+    // What each knob falls back to when the slot drops its pin (PATCH field = null).
+    scheduling_inherited: {
+      max_concurrency: Number(inheritedPolicy.max_concurrency ?? 2),
+      max_rpm: Number(inheritedPolicy.max_rpm ?? 0),
+      session_slots: isCodex ? null : normalizeSessionSlots(extras.routingConfig?.inference?.session_slots),
+    },
     quota_override: quotaOverride,
     quota_policy: isCodex ? null : vmQuotaView(policy, vmQuotaConfig),
     quota_inherited: isCodex ? null : vmQuotaView(inheritedPolicy, globalQuotaConfig),

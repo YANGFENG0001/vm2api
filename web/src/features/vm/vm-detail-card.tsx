@@ -55,7 +55,7 @@ import {
 import { VmUsageWindows } from '@/features/vm/usage-windows'
 import { refreshBlockedReason } from '@/features/vm/vm-action-menu'
 import { useVmActions } from '@/features/vm/vm-actions-context'
-import { VmQuotaField } from '@/features/vm/vm-quota-editor'
+import { VmSchedulingBlock } from '@/features/vm/vm-scheduling'
 
 function Section({
   title,
@@ -121,7 +121,7 @@ function CardBody({ vm, accounts }: { vm: Vm; accounts?: UsageAccountRow[] }) {
         <VmUsageWindows vm={vm} accounts={accounts} quotaActions />
       </Section>
 
-      {codex ? null : <VmQuotaField vm={vm} />}
+      <VmSchedulingBlock vm={vm} />
 
       <div className='grid gap-2 sm:grid-cols-2'>
         <Section title='今日'>

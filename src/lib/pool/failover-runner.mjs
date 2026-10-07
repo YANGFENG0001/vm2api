@@ -826,10 +826,15 @@ export class FailoverRunner {
         if (typeof onAttempt === 'function') {
           await onAttempt({ attemptNo, selected, result, policy })
         }
-        if (policy.reason === 'content_filter_refusal') {
+        if (policy.reason === 'content_filter_refusal' || policy.reason === 'usage_policy_refusal') {
           this.scheduler.markSuccess(selected, { workerStatus: result.workerStatus || null, countUsage })
           bindAll({ accountId: selected.accountId, vmId: selected.vmId })
-          return { ...result, ...attribution(), finalState: 'content_filter', policy }
+          return {
+            ...result,
+            ...attribution(),
+            finalState: policy.reason === 'usage_policy_refusal' ? 'rejected' : 'content_filter',
+            policy,
+          }
         }
         if (verifiedSuccess(result)) {
           this.scheduler.markSuccess(selected, { workerStatus: result.workerStatus || null, countUsage })

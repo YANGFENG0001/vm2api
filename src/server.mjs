@@ -256,6 +256,7 @@ const {
   applyVmConcurrency,
   applyVmRpm,
   applyVmSessionSlots,
+  inheritVmScheduling,
   applyVmQuotaOverride,
 } = routingRt
 
@@ -882,6 +883,7 @@ const handlePanel = createPanelHandler({
   applyVmConcurrency,
   applyVmRpm,
   applyVmSessionSlots,
+  inheritVmScheduling,
   applyVmQuotaOverride,
   initPoolRuntime,
   poolSchedulerConfig,

@@ -63,10 +63,26 @@ export type RefusalGuardItem = {
   preview: string | null
 }
 
+export type RefusalDeviceBlock = {
+  device_id: string
+  first_seen_at: string
+  last_seen_at: string
+  hit_count: number
+  source_request_id: string | null
+  fingerprint: string | null
+  reason: string | null
+}
+
 export type RefusalGuardConfig = {
   enabled: boolean
+  similarity_enabled: boolean
+  /** 80、85、90 或 95。 */
+  similarity: number
+  device_block_enabled: boolean
   count: number
   items: RefusalGuardItem[]
+  device_count: number
+  devices: RefusalDeviceBlock[]
 }
 
 export type NotifyEvents = {

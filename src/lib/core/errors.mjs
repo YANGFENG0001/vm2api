@@ -141,6 +141,9 @@ export function isUsagePolicyErrorMessage(message = '') {
   return USAGE_POLICY_MESSAGE.test(String(message || ''))
 }
 
+export const REFUSAL_GUARD_MESSAGE =
+  "Request blocked by the refusal guard. Anthropic's API previously refused this pattern."
+
 /**
  * `overloaded` (real capacity, 529), `rate_limited` (every account in an
  * upstream 429 cooldown, 429), `unavailable` (nothing eligible, 503), or null.
@@ -433,6 +436,19 @@ export function mapUpstreamError(status, body, headers = {}) {
   }
   const request_id =
     body?.error?.request_id || body?.request_id || headers['request-id'] || headers['x-request-id'] || null
+  if (isUsagePolicyErrorMessage(msg)) {
+    return makeError({
+      type: ErrorType.PERMISSION,
+      code: ErrorCode.REFUSAL_GUARD,
+      message: REFUSAL_GUARD_MESSAGE,
+      status: 503,
+      details: {
+        upstream_type: upType,
+        upstream_status: status,
+      },
+      request_id,
+    })
+  }
   if (inboundCode === ErrorCode.CONTENT_FILTER_REFUSAL) {
     return makeError({
       type: ErrorType.PERMISSION,

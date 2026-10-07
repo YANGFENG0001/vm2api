@@ -5,13 +5,18 @@
 import { applyIntercept } from '../core/intercept.mjs'
 import { detectDistill, distillBlockError } from '../core/distill-detect.mjs'
 import {
+  inboundRefusalDeviceId,
   isRefusalGuardEnabled,
   isUpstreamRefusal,
+  matchStoredRefusal,
   refusalFingerprint,
   refusalGuardError,
+  refusalGuardPolicy,
   refusalPreview,
+  refusalPromptSignature,
 } from '../core/refusal-guard.mjs'
 import { RefusalGuardsRepo } from '../db/repos/refusal-guards-repo.mjs'
+import { RefusalDeviceBlocksRepo } from '../db/repos/refusal-device-blocks-repo.mjs'
 import { SettingsRepo } from '../db/repos/settings-repo.mjs'
 import {
   toClaudeMessages,
@@ -276,16 +281,73 @@ export function createHandleProtocol(deps) {
     }
   }
 
-  function applyRefusalGuard({ inbound, body, logBag, requestId, res }) {
-    if (!refusalEnabled()) return false
+  function deviceRepo() {
+    if (deps.refusalDevices) return deps.refusalDevices
+    try {
+      return new RefusalDeviceBlocksRepo()
+    } catch {
+      return null
+    }
+  }
+
+  function banRefusalDevice(deviceId, { requestId, fingerprint, reason }) {
+    if (!deviceId) return
+    try {
+      deviceRepo()?.block?.({ deviceId, requestId, fingerprint, reason })
+    } catch {
+      /* the prompt block still stands */
+    }
+  }
+
+  function refusalPolicy() {
+    try {
+      const settings = deps.settings || new SettingsRepo()
+      return refusalGuardPolicy((key, fallback) => settings.get(key, fallback))
+    } catch {
+      return refusalGuardPolicy()
+    }
+  }
+
+  function applyRefusalGuard({ inbound, body, headers, logBag, requestId, res }) {
+    const policy = refusalPolicy()
+    if (!policy.enabled) return false
     const repo = refusalRepo()
     if (!repo) return false
-    const hit = repo.get(refusalFingerprint(body, inbound))
-    if (!hit) return false
-    repo.hit(hit.fingerprint)
+    const match = matchStoredRefusal({
+      inbound,
+      body,
+      headers,
+      repo,
+      devices: deviceRepo(),
+      similarityEnabled: policy.similarity_enabled,
+      similarity: policy.similarity / 100,
+      deviceBlockEnabled: policy.device_block_enabled,
+    })
+    if (!match) return false
+    if (match.kind === 'device') {
+      try {
+        deviceRepo()?.hit?.(match.deviceId)
+      } catch {
+        /* counter is best-effort */
+      }
+    } else {
+      try {
+        repo.hit(match.fingerprint)
+      } catch {
+        /* counter is best-effort */
+      }
+      if (policy.device_block_enabled) {
+        banRefusalDevice(match.deviceId, {
+          requestId,
+          fingerprint: match.fingerprint,
+          reason: match.kind === 'similar' ? 'refusal_similar' : 'refusal_guard',
+        })
+      }
+    }
     logBag.via = 'refusal-guard'
     logBag.attempt_count = 0
-    logBag.final_state = 'refusal_guard'
+    logBag.final_state =
+      match.kind === 'device' ? 'refusal_device' : match.kind === 'similar' ? 'refusal_similar' : 'refusal_guard'
     logBag.error_code = 'refusal_guard'
     const blocked = refusalGuardError(requestId)
     logBag.error_message = blocked.body?.error?.message
@@ -293,24 +355,34 @@ export function createHandleProtocol(deps) {
     return true
   }
 
-  function rememberRefusal({ inbound, body, result, logBag, requestId }) {
+  function rememberRefusal({ inbound, body, headers, result, logBag, requestId }) {
     if (!refusalEnabled()) return
     const contentRefusal = isUpstreamRefusal(result, logBag)
     const timed = result?.policy?.rememberRefusal === true
     if (!contentRefusal && !timed) return
     const repo = refusalRepo()
     if (!repo) return
+    const fingerprint = refusalFingerprint(body, inbound)
     try {
       const ttl = Number(result?.policy?.refusalTtlMs) || 0
       repo.remember({
-        fingerprint: refusalFingerprint(body, inbound),
+        fingerprint,
         model: body?.model || inbound?.model || '',
         requestId,
         errorMessage: logBag.error_message || result?.body?.error?.message || null,
         preview: refusalPreview(body, inbound),
         expiresAt: contentRefusal || ttl <= 0 ? null : new Date(Date.now() + ttl).toISOString(),
+        signature: refusalPromptSignature(inbound, body),
       })
-    } catch {}
+    } catch {
+      return
+    }
+    if (!contentRefusal || !refusalPolicy().device_block_enabled) return
+    banRefusalDevice(inboundRefusalDeviceId({ inbound, body, headers }), {
+      requestId,
+      fingerprint,
+      reason: 'refusal_guard',
+    })
   }
 
   async function streamAndAssembleClaudeMessage({
@@ -558,7 +630,9 @@ export function createHandleProtocol(deps) {
     if (applyDistillGuard({ req, inbound, body: ctx.body, fp, logBag, requestId: logCtx.request_id, res })) {
       return
     }
-    if (applyRefusalGuard({ inbound, body: ctx.body, logBag, requestId: logCtx.request_id, res })) {
+    if (
+      applyRefusalGuard({ inbound, body: ctx.body, headers: req.headers, logBag, requestId: logCtx.request_id, res })
+    ) {
       return
     }
     if (platform.platform === 'openai') {
@@ -675,7 +749,9 @@ export function createHandleProtocol(deps) {
     if (applyDistillGuard({ req, inbound, body: ctx.body, fp, logBag, requestId: logCtx.request_id, res })) {
       return
     }
-    if (applyRefusalGuard({ inbound, body: ctx.body, logBag, requestId: logCtx.request_id, res })) {
+    if (
+      applyRefusalGuard({ inbound, body: ctx.body, headers: req.headers, logBag, requestId: logCtx.request_id, res })
+    ) {
       return
     }
     const officialClient = isOfficialClaudeClient(fp.client_class)
@@ -1276,7 +1352,7 @@ export function createHandleProtocol(deps) {
       logBag.error_code = logBag.error_code || 'content_filter_refusal'
       logBag.error_message = logBag.error_message || 'upstream stop_reason=refusal'
     }
-    rememberRefusal({ inbound, body: ctx.body, result, logBag, requestId: logCtx.request_id })
+    rememberRefusal({ inbound, body: ctx.body, headers: req.headers, result, logBag, requestId: logCtx.request_id })
 
     if (result?.accountId) {
       try {
@@ -1334,7 +1410,7 @@ export function createHandleProtocol(deps) {
         logBag.error_code = result?.body?.error?.code || 'stream_incomplete'
         logBag.error_message = result?.body?.error?.message || 'Stream did not reach a verified terminal state'
       }
-      rememberRefusal({ inbound, body: ctx.body, result, logBag, requestId: logCtx.request_id })
+      rememberRefusal({ inbound, body: ctx.body, headers: req.headers, result, logBag, requestId: logCtx.request_id })
       return res.end()
     }
 

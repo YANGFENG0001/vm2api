@@ -225,9 +225,15 @@ export type Vm = {
   active?: boolean
   max_concurrency?: number
   max_rpm?: number
-  /** Claude CLI native 执行位热准入上限；内核固定预开 20。 */
+  /** true = 本槽钉住了并发；false = 跟随分档（分档保存时会被改写）。 */
+  concurrency_override?: boolean
+  /** true = 本槽钉住了 RPM；false = 跟随分档。 */
+  rpm_override?: boolean
+  /** Claude CLI native 执行位热准入上限，也是预调度的席位上限；内核固定预开 20。 */
   session_slots?: number | null
   session_slots_override?: boolean
+  /** 去掉本槽覆盖（PATCH 字段传 null）后会落回的值。 */
+  scheduling_inherited?: VmSchedulingInherited | null
   /** 单槽位配额覆盖；缺字段 = 跟随全局 `settings/quota`。GPT 槽位恒为 null。 */
   quota_override?: VmQuotaOverride | null
   /** 覆盖后实际生效的配额。 */
@@ -490,6 +496,14 @@ export type VmQuotaView = {
 }
 
 export type VmQuotaOverride = Partial<VmQuotaView>
+
+/** VM 并发 / RPM / 席位上限跟随时的取值：并发与 RPM 来自分档，席位来自 `inference.session_slots`。 */
+export type VmSchedulingInherited = {
+  max_concurrency: number
+  max_rpm: number
+  /** Codex 行为 null。 */
+  session_slots: number | null
+}
 
 export type QuotaTierKey = 'default' | 'pro' | 'max'
 

@@ -167,6 +167,28 @@ export function createRoutingRuntime(ctx) {
     return applied
   }
 
+  /**
+   * Drop a VM's manual concurrency / RPM / seat-cap pin and take the value the
+   * next routing save would push to it, so the slot follows its tier again.
+   */
+  function inheritVmScheduling(id, { concurrency = false, rpm = false, sessionSlots = false } = {}) {
+    const listed = listVms(ctx.cfg.paths.project).find((vm) => vm.id === id)
+    if (!listed) return null
+    const routingConfig = getRouting()
+    let vm = listed
+    if (concurrency || rpm) {
+      const policy = normalizeTiers(routingConfig.tiers, routingConfig.quota, routingConfig.concurrency)[
+        vmTierKey(listed)
+      ]
+      if (concurrency) vm = applyVmConcurrency(id, Number(policy?.max_concurrency ?? 2), { override: false }) || vm
+      if (rpm) vm = applyVmRpm(id, Number(policy?.max_rpm ?? 0), { override: false }) || vm
+    }
+    if (sessionSlots) {
+      vm = applyVmSessionSlots(id, routingConfig.inference?.session_slots, { override: false }) || vm
+    }
+    return vm
+  }
+
   function applyRoutingTierRpm(tiers) {
     const routingConfig = getRouting()
     const policies = normalizeTiers(tiers, routingConfig.quota, routingConfig.concurrency)
@@ -503,6 +525,7 @@ export function createRoutingRuntime(ctx) {
     applyVmConcurrency,
     applyVmRpm,
     applyVmSessionSlots,
+    inheritVmScheduling,
     applyVmQuotaOverride,
     storedAccountTier,
     vmTierKey,

@@ -150,6 +150,40 @@ test('panel session slots validate, persist, and stay independent from concurren
   }
 })
 
+test('panel VM concurrency, RPM and session slots return to tier / global on null', async () => {
+  const gw = await startGateway()
+  try {
+    const vmPath = path.join(gw.project, 'vms', 'vm-sim-01.json')
+    const pinned = await api(gw, 'PATCH', '/api/panel/vms/vm-sim-01', {
+      body: { max_concurrency: 7, max_rpm: 33, session_slots: 3 },
+    })
+    assert.equal(pinned.status, 200, pinned.text)
+    assert.equal(pinned.json.data.vm.concurrency_override, true)
+    assert.equal(pinned.json.data.vm.rpm_override, true)
+    assert.equal(pinned.json.data.vm.session_slots_override, true)
+    const inherited = pinned.json.data.vm.scheduling_inherited
+
+    const reset = await api(gw, 'PATCH', '/api/panel/vms/vm-sim-01', {
+      body: { max_concurrency: null, max_rpm: null, session_slots: null },
+    })
+    assert.equal(reset.status, 200, reset.text)
+    const vm = reset.json.data.vm
+    assert.equal(vm.concurrency_override, false)
+    assert.equal(vm.rpm_override, false)
+    assert.equal(vm.session_slots_override, false)
+    assert.equal(vm.max_concurrency, inherited.max_concurrency)
+    assert.equal(vm.max_rpm, inherited.max_rpm)
+    assert.equal(vm.session_slots, inherited.session_slots)
+
+    const saved = JSON.parse(fs.readFileSync(vmPath, 'utf8'))
+    assert.equal(saved.policy.concurrencyOverride, false)
+    assert.equal(saved.policy.rpmOverride, false)
+    assert.equal(saved.policy.sessionSlotsOverride, false)
+  } finally {
+    await gw.stop()
+  }
+})
+
 test('sessionKey import without SOCKS5 is rejected', async () => {
   const gw = await startGateway()
   try {

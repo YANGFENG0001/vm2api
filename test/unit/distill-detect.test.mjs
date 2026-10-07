@@ -132,7 +132,7 @@ test('memory-stage-one harvest is distill even at 4096 tokens', () => {
   )
 })
 
-test('hostdzire memory-stage-one envelope is distill even if official or zero inject', () => {
+test('memory-stage-one envelope is distill even if official or zero inject', () => {
   const inbound = {
     model: 'claude-opus-5',
     max_tokens: 4096,
@@ -370,13 +370,13 @@ test('normalize keeps default fingerprints when omitted', () => {
 test('handleProtocol intercepts distill before credential hop, refusal guard after distill', () => {
   const src = fs.readFileSync(path.join(root, 'src/lib/protocol/handle-protocol.mjs'), 'utf8')
   const earlyDistill = src.indexOf('if (applyDistillGuard(')
-  const earlyRefusal = src.indexOf('if (applyRefusalGuard(')
+  const earlyRefusal = src.indexOf('applyRefusalGuard({ inbound, body: ctx.body')
   const codex = src.indexOf('return handleCodexProtocol(')
   assert.ok(earlyDistill > 0 && earlyDistill < codex)
   assert.ok(earlyRefusal > earlyDistill && earlyRefusal < codex)
   const before = src.indexOf("applyIntercept(cfg.intercept.rules, 'before_upstream'")
   const lateDistill = src.indexOf('if (applyDistillGuard(', earlyDistill + 1)
-  const lateRefusal = src.indexOf('if (applyRefusalGuard(', earlyRefusal + 1)
+  const lateRefusal = src.indexOf('applyRefusalGuard({ inbound, body: ctx.body', earlyRefusal + 1)
   const api = src.indexOf("inferenceBackend === 'api'")
   assert.ok(before > 0)
   assert.ok(lateDistill > before)
