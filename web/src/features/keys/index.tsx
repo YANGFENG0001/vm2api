@@ -24,6 +24,7 @@ import { TableSkeleton } from '@/components/page-skeletons'
 import { QueryGate } from '@/components/query-gate'
 import { StatusMark } from '@/components/status-mark'
 import { apiKeysQueryOptions } from '@/features/keys/queries'
+import { vmsListQueryOptions } from '@/features/vm/queries'
 import {
   keyExpiryText,
   keyIsDead,
@@ -36,15 +37,19 @@ import {
 import { KeyLimitsDialog } from './key-limits-dialog'
 import { keyLimitsPayload, type KeyLimitsDraft } from './key-payload'
 import { KeyRevealDialog, type RevealedKey } from './key-reveal-dialog'
+import { KeyStatsDialog } from './key-stats-dialog'
 
 export function KeysPage() {
   const qc = useQueryClient()
   const q = useQuery(apiKeysQueryOptions())
+  const vms = useQuery(vmsListQueryOptions())
+  const vmItems = vms.data?.items || []
   const [createOpen, setCreateOpen] = useState(false)
   const [editId, setEditId] = useState('')
-  const [delId, setDelId] = useState('')
+  const [statsId, setStatsId] = useState('')
   const [rotateId, setRotateId] = useState('')
   const [revealed, setRevealed] = useState<RevealedKey | null>(null)
+  const [delId, setDelId] = useState('')
   const keys = q.data?.keys || []
   const editing = keys.find((k) => k.id === editId) || null
   const rotating = keys.find((k) => k.id === rotateId) || null
@@ -228,6 +233,7 @@ export function KeysPage() {
                   onCopy={() => void copyPlain(k)}
                   onRotate={() => setRotateId(k.id)}
                   onEdit={() => setEditId(k.id)}
+                  onStats={() => setStatsId(k.id)}
                   onToggle={() =>
                     toggle.mutate({
                       id: k.id,
@@ -247,6 +253,7 @@ export function KeysPage() {
         open={createOpen}
         onOpenChange={setCreateOpen}
         pending={create.isPending}
+        vms={vmItems}
         onSubmit={(draft) => create.mutate(draft)}
       />
       <KeyLimitsDialog
@@ -256,6 +263,7 @@ export function KeysPage() {
           if (!open) setEditId('')
         }}
         initial={editing}
+        vms={vmItems}
         pending={edit.isPending}
         onSubmit={(draft) => {
           if (!editId) return
@@ -263,6 +271,13 @@ export function KeysPage() {
         }}
       />
       <KeyRevealDialog value={revealed} onClose={() => setRevealed(null)} />
+      <KeyStatsDialog
+        item={keys.find((k) => k.id === statsId) || null}
+        vms={vmItems}
+        onOpenChange={(open) => {
+          if (!open) setStatsId('')
+        }}
+      />
       <ConfirmDialog
         open={!!rotateId}
         onOpenChange={() => setRotateId('')}
@@ -311,6 +326,7 @@ function KeyRow({
   onCopy,
   onRotate,
   onEdit,
+  onStats,
   onToggle,
   onReset,
   onDelete,
@@ -321,6 +337,7 @@ function KeyRow({
   onCopy: () => void
   onRotate: () => void
   onEdit: () => void
+  onStats: () => void
   onToggle: () => void
   onReset: () => void
   onDelete: () => void
@@ -335,6 +352,8 @@ function KeyRow({
       <TableCell>
         <div className='font-medium'>{item.name || 'default'}</div>
         <div className='text-xs text-muted-foreground'>
+          {scopeText(item)}
+          {' · '}
           {fmtNum(item.requests || 0)} 请求
           {item.inflight ? ` · ${item.inflight} 进行中` : ''}
         </div>
@@ -390,8 +409,11 @@ function KeyRow({
         {expiry.text}
       </TableCell>
       <TableCell className='space-x-1 text-right'>
+        <Button size='sm' variant='ghost' disabled={busy} onClick={onStats}>
+          统计
+        </Button>
         <Button size='sm' variant='ghost' disabled={busy} onClick={onEdit}>
-          并发
+          编辑
         </Button>
         <Button size='sm' variant='ghost' disabled={busy} onClick={onToggle}>
           {active ? '停用' : '启用'}
@@ -410,4 +432,12 @@ function KeyRow({
       </TableCell>
     </TableRow>
   )
+}
+
+function scopeText(item: ApiKeyItem): string {
+  if (item.group_type === 'anthropic')
+    return `Anthropic · ${item.allowed_vms?.length || 0} 台`
+  if (item.group_type === 'openai')
+    return `OpenAI · ${item.allowed_vms?.length || 0} 台`
+  return '全局'
 }

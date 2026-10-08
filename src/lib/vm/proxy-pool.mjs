@@ -397,6 +397,39 @@ export class ProxyPool {
     this.save()
     return { ok: true, created: true, proxy: this.publicProxy(proxy) }
   }
+  _findSocksRow(parsed) {
+    const key = (p) => JSON.stringify([p.host, p.port, p.username || '', p.password || ''])
+    const wanted = key(parsed)
+    return this.state.proxies.find((p) => key(p) === wanted) || null
+  }
+
+  /** Public view of the SOCKS row with these credentials, or null. Never creates. */
+  findSocks(fields = {}) {
+    const parsed = parseSocks5Fields(fields)
+    const found = parsed ? this._findSocksRow(parsed) : null
+    return found ? this.publicProxy(found) : null
+  }
+
+  /**
+   * Return the SOCKS row with this host/port/username/password, creating it
+   * when absent. Same credentials must not allocate a second id.
+   */
+  ensureSocks(fields = {}, { ownerUserId = null, label = null } = {}) {
+    const parsed = parseSocks5Fields(fields)
+    if (!parsed) return { ok: false, error: 'invalid_proxy' }
+    const found = this._findSocksRow(parsed)
+    if (found) return { ok: true, created: false, proxy: this._withAuth(found) }
+    const imported = this.importParsed([parsed], { ownerUserId })
+    const id = imported.items[0]?.id
+    const row = this.state.proxies.find((p) => p.id === id)
+    if (!row) return { ok: false, error: 'proxy_import_failed' }
+    const name = label == null ? '' : String(label).trim().slice(0, 80)
+    if (name) {
+      row.label = name
+      this.save()
+    }
+    return { ok: true, created: true, proxy: this._withAuth(row) }
+  }
 
   importLines(text, extra = {}) {
     const parsed = []

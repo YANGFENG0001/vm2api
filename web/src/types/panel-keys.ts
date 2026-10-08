@@ -1,3 +1,5 @@
+import type { VmUsageStatsDay, VmUsageStatsRank } from '@/types/panel-vm'
+
 export type ApiKeyItem = {
   id: string
   name?: string
@@ -25,8 +27,24 @@ export type ApiKeyItem = {
   last_used_at?: string
   requests?: number
   inflight?: number
+  /** all = 全局可调度。anthropic / openai 必须带 allowed_vms。 */
+  group_type?: 'all' | 'anthropic' | 'openai'
+  allowed_vms?: string[]
 }
 
 export type ApiKeysPayload = {
   keys?: ApiKeyItem[]
+}
+
+export type KeyUsageStats = {
+  days: number
+  since: string | null
+  history: VmUsageStatsDay[]
+  models: VmUsageStatsRank[]
+  vms: VmUsageStatsRank[]
+}
+
+export type KeyStatsPayload = {
+  item?: ApiKeyItem
+  usage_stats?: KeyUsageStats | null
 }

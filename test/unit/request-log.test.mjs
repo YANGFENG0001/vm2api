@@ -247,6 +247,37 @@ test('vmUsageStats buckets by Shanghai day, isolates the slot and ranks models a
   assert.deepEqual(store.repo.vmUsageStats({ vmId: null }).history, [])
 })
 
+test('keyUsageStats counts only that key and ranks VMs', () => {
+  const store = tmpStore('normal')
+  const insert = store.db.prepare(`
+    INSERT INTO usage_logs (id, request_id, created_at, path, model, upstream_model, status,
+      vm_id, api_key_id, input_tokens, output_tokens, total_cost, duration_ms)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 100, 50, ?, ?)
+  `)
+  const now = new Date().toISOString()
+  insert.run('k1', 'rk1', now, '/v1/messages', 'm-a', 'm-a', 200, 'vm-a', 'key_a', 1, 10)
+  insert.run('k2', 'rk2', now, '/v1/messages', 'm-b', 'm-b', 200, 'vm-b', 'key_a', 3, 20)
+  insert.run('k3', 'rk3', now, '/v1/messages', 'm-a', 'm-a', 200, 'vm-a', 'key_b', 99, 1)
+  const out = store.repo.keyUsageStats({ apiKeyId: 'key_a', days: 30 })
+  assert.equal(
+    out.history.reduce((n, row) => n + row.requests, 0),
+    2,
+  )
+  assert.equal(
+    out.history.reduce((n, row) => n + row.total_cost, 0),
+    4,
+  )
+  assert.deepEqual(
+    out.vms.map((row) => [row.name, row.requests]),
+    [
+      ['vm-b', 1],
+      ['vm-a', 1],
+    ],
+  )
+  assert.equal(out.endpoints, undefined)
+  assert.deepEqual(store.repo.keyUsageStats({ apiKeyId: null }).history, [])
+})
+
 test('zero group multiplier keeps usage and key counters but charges no USD', () => {
   const store = tmpStore('normal')
   const groups = new GroupsRepo(store.db)

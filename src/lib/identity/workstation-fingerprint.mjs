@@ -44,7 +44,7 @@ function hex(n) {
 }
 
 function pickTimezone(vm = {}) {
-  return validTimezone(vm.timezone) || US_TIMEZONES[crypto.randomInt(0, US_TIMEZONES.length)]
+  return validTimezone(vm.timezone) || ''
 }
 
 export function generateWorkstationFingerprint(vm = {}, { taken, now } = {}) {

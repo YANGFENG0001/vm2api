@@ -637,6 +637,10 @@ export class RequestLogStore {
     return this.repo.vmUsageStats(opts)
   }
 
+  keyUsageStats(opts = {}) {
+    return this.repo.keyUsageStats(opts)
+  }
+
   /** Windowed SLA / QPS / TTFT snapshot for overview + log analysis. */
   windowStats(opts = {}) {
     return this.repo.windowStats(opts)

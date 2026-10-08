@@ -52,6 +52,9 @@ test('import-style create succeeds without seed_policy or SOCKS5', async () => {
     assert.equal(saved.seed_policy.telemetry_disabled, false)
     assert.equal(saved.proxy_required, false)
     assert.equal(saved.proxy, null)
+    assert.equal(saved.timezone, null)
+    assert.equal(saved.timezone_source, 'auto')
+    assert.equal(saved.fingerprint.timezone, '')
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }
@@ -147,6 +150,10 @@ test('create returns the persisted VM when runtime start fails', async () => {
         getProxyForVm() {
           return proxy
         },
+        // A new slot without a requested zone takes its exit's.
+        proxyTimezone() {
+          return 'Europe/Berlin'
+        },
       },
     )
     await handlePanel({ method: 'POST' }, {}, new URL('http://localhost/api/panel/vms/create'))
@@ -160,6 +167,8 @@ test('create returns the persisted VM when runtime start fails', async () => {
     const saved = JSON.parse(fs.readFileSync(path.join(root, 'vms', `${vm.id}.json`), 'utf8'))
     assert.equal(saved.status, 'error')
     assert.ok(saved.schedule_disabled_reason)
+    assert.equal(saved.timezone, 'Europe/Berlin')
+    assert.equal(saved.timezone_source, 'proxy_geo')
   } finally {
     process.env.PATH = prevPath
     fs.rmSync(root, { recursive: true, force: true })

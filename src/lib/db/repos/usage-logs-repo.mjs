@@ -173,12 +173,16 @@ function bucketEventsSince(rows = [], sinceMs) {
   )
 }
 
-function filterCond({ since = null, until = null, vmId = null, accountId = null } = {}) {
+function filterCond({ since = null, until = null, vmId = null, accountId = null, apiKeyId = null } = {}) {
   const { cond, params } = timeCond(since, until)
   const parts = cond ? [cond.replace(/^WHERE /, '')] : []
   if (vmId) {
     parts.push('vm_id = ?')
     params.push(vmId)
+  }
+  if (apiKeyId) {
+    parts.push('api_key_id = ?')
+    params.push(apiKeyId)
   }
   if (accountId) {
     parts.push('(account_id = ? OR final_account_id = ?)')
@@ -666,10 +670,32 @@ export class UsageLogsRepo {
    * is the inbound request path (usage_logs keeps no separate upstream endpoint).
    */
   vmUsageStats({ vmId, days = 30 } = {}) {
-    if (!vmId) return { days: 0, since: null, history: [], models: [], endpoints: [] }
+    return this._usageWindow({
+      vmId,
+      days,
+      rankExpr: "COALESCE(NULLIF(path, ''), '—')",
+      rankKey: 'endpoints',
+      rankLimit: 8,
+    })
+  }
+
+  /** Same window as vmUsageStats, isolated to one managed key. Third rank is the VM. */
+  keyUsageStats({ apiKeyId, days = 30 } = {}) {
+    return this._usageWindow({
+      apiKeyId,
+      days,
+      rankExpr: "COALESCE(NULLIF(vm_id, ''), '—')",
+      rankKey: 'vms',
+      rankLimit: 12,
+    })
+  }
+
+  _usageWindow({ vmId = null, apiKeyId = null, days = 30, rankExpr, rankKey, rankLimit = 8 } = {}) {
+    const empty = { days: 0, since: null, history: [], models: [], [rankKey]: [] }
+    if (!vmId && !apiKeyId) return empty
     const span = Math.max(1, Math.min(90, Math.floor(Number(days)) || 30))
     const since = new Date(Date.parse(shanghaiDayStartIso()) - (span - 1) * 86400_000).toISOString()
-    const { cond, params } = filterCond({ since, vmId })
+    const { cond, params } = filterCond({ since, vmId, apiKeyId })
     const history = this.db
       .prepare(`
       SELECT strftime('%Y-%m-%d', created_at, '+8 hours') AS day,
@@ -720,7 +746,7 @@ export class UsageLogsRepo {
       since,
       history,
       models: group("COALESCE(NULLIF(upstream_model, ''), NULLIF(model, ''), NULLIF(requested_model, ''), '—')", 12),
-      endpoints: group("COALESCE(NULLIF(path, ''), '—')", 8),
+      [rankKey]: group(rankExpr, rankLimit),
     }
   }
 

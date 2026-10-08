@@ -96,12 +96,12 @@ test('cli-hop envelope keeps role=system turns that the VM betas do not declare'
   const out = finalizeWorkerPayload({
     body,
     reqHeaders: {},
-    // setup-token betas omit mid-conversation-system; cli-node sends it on the wire.
+    // Request fields and their beta gates share the existing CLI body channel.
     exec: { homeDir: '', vm: { claude: { mode: 'setup-token', scope: 'user:inference' } } },
     identity: null,
     cliHop: true,
   })
-  assert.doesNotMatch(String(out.headers['anthropic-beta'] || ''), /mid-conversation-system/)
+  assert.ok(out.body.betas.includes('mid-conversation-system-2026-04-07'))
   assert.deepEqual(
     out.body.messages.map((message) => message.role),
     ['user', 'system', 'assistant', 'user'],
@@ -109,12 +109,12 @@ test('cli-hop envelope keeps role=system turns that the VM betas do not declare'
   assert.deepEqual(out.body.system, body.system)
 })
 
-test('setup-token cli-hop downgrades thinking.display updates and keeps summarized', () => {
+test('setup-token cli-hop preserves updates with its beta and isolates later requests', () => {
   const exec = { homeDir: '', vm: { claude: { mode: 'setup-token', scope: 'user:inference' } } }
   const updates = finalizeWorkerPayload({
     body: {
       model: 'claude-opus-5-5',
-      thinking: { type: 'adaptive', display: ' Updates ' },
+      thinking: { type: 'adaptive', display: 'updates' },
       messages: [{ role: 'user', content: 'hi' }],
     },
     reqHeaders: {},
@@ -123,8 +123,9 @@ test('setup-token cli-hop downgrades thinking.display updates and keeps summariz
     cliHop: true,
   })
   assert.equal(updates.body.thinking.type, 'adaptive')
-  assert.equal(updates.body.thinking.display, 'omitted')
-  assert.doesNotMatch(String(updates.headers['anthropic-beta'] || ''), /thinking-display-updates/)
+  assert.equal(updates.body.thinking.display, 'updates')
+  assert.ok(updates.body.betas.includes('thinking-display-updates-2026-08-18'))
+  assert.ok(!updates.body.betas.includes('claude-code-20250219'))
   const summarized = finalizeWorkerPayload({
     body: {
       model: 'claude-opus-5-5',
@@ -137,6 +138,7 @@ test('setup-token cli-hop downgrades thinking.display updates and keeps summariz
     cliHop: true,
   })
   assert.equal(summarized.body.thinking.display, 'summarized')
+  assert.ok(!summarized.body.betas.includes('thinking-display-updates-2026-08-18'))
 })
 
 const unix = process.platform !== 'win32'

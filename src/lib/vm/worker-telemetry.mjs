@@ -53,7 +53,7 @@ function telemetryHeaders(identity) {
     'x-stainless-arch': fp.stainless_arch || 'x64',
     'x-stainless-runtime': fp.stainless_runtime || 'node',
     'x-stainless-runtime-version': fp.stainless_runtime_version || 'v26.3.0',
-    'x-stainless-package-version': fp.stainless_package_version || '0.112.1',
+    'x-stainless-package-version': fp.stainless_package_version || '0.128.0',
   }
   if (identity.sessionId) headers['x-claude-code-session-id'] = identity.sessionId
   if (lang) headers['accept-language'] = lang

@@ -26,6 +26,7 @@ const CODE_MAP = {
   missing_api_key: 'auth',
   api_key_disabled: 'auth',
   api_key_expired: 'auth',
+  key_group_mismatch: 'request',
   invalid_json: 'request',
   body_too_large: 'request',
   empty_body: 'request',
@@ -119,6 +120,7 @@ export const SLA_OK_ERROR_CODES = new Set([
   'refusal_guard',
   'content_filter_refusal',
   'policy_blocked',
+  'key_group_mismatch',
   // Pool queue full / timeout moved from 429 to 529; SLA keeps counting them as it did at 429.
   'pool_overloaded',
   'pool_wait_queue_full',

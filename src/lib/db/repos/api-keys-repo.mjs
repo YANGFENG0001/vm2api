@@ -31,6 +31,8 @@ const COLUMNS = [
   'key_prefix',
   'key_suffix',
   'category',
+  'group_type',
+  'allowed_vms',
   'key_secret',
   'user_id',
   'group_id',
@@ -81,6 +83,8 @@ function toValue(rec, c) {
   const v = rec[c]
   if (v == null) {
     if (c === 'category') return 'oauth'
+    if (c === 'group_type') return 'all'
+    if (c === 'allowed_vms') return '[]'
     return NUMERIC_DEFAULT_0.has(c) ? 0 : null
   }
   return v

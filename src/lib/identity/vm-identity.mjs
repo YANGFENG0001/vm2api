@@ -28,7 +28,7 @@ export const OFFICIAL_STAINLESS = Object.freeze({
   stainless_arch: 'x64',
   stainless_runtime: 'node',
   stainless_runtime_version: 'v26.3.0',
-  stainless_package_version: '0.112.1',
+  stainless_package_version: '0.128.0',
 })
 
 export function officialClaudeCliUa(version = OFFICIAL_CLI_VERSION) {

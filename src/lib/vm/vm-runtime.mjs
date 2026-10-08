@@ -9,7 +9,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { readRoutingConfigFile } from '../core/config.mjs'
-import { normalizeTimezone, US_TIMEZONES } from '../core/timezone.mjs'
+import { US_TIMEZONES, validTimezone } from '../core/timezone.mjs'
 import { runtimeKind } from './runtime-kind.mjs'
 import { buildWorkerTelemetry } from './worker-telemetry.mjs'
 import { kernelBinPath, writeKernelConfig } from '../transport/rust-kernel-supervisor.mjs'
@@ -415,7 +415,8 @@ export function startVmRuntime(vm, projectRoot, { recreate = false, routing } = 
   const host = String(vm.fingerprint?.hostname || '').trim() || slotName
   const kernel = vm.kernel && OS_CATALOG[vm.kernel] ? vm.kernel : 'ubuntu-24.04'
   vm.kernel = kernel
-  vm.timezone = normalizeTimezone(vm.timezone)
+  const zone = validTimezone(vm.timezone)
+  if (zone) vm.timezone = zone
   vm.locale = vm.locale || STANDARD_LOCALE
   const image = imageForKernel(kernel)
   const home = path.join(projectRoot, 'vms', vm.id, 'cli-home')
@@ -546,7 +547,7 @@ export function startVmRuntime(vm, projectRoot, { recreate = false, routing } = 
     '-e',
     'CLAUDE_CONFIG_DIR=/home/kincli/.claude',
     '-e',
-    `TZ=${vm.timezone}`,
+    `TZ=${zone || 'UTC'}`,
     '-e',
     `LANG=${vm.locale}`,
     '-e',
