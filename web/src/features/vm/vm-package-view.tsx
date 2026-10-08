@@ -1,4 +1,5 @@
 import { cn } from '@/lib/utils'
+import { localProxyText } from '@/lib/vm-status'
 
 export type PackageFacts = {
   ok: true
@@ -47,7 +48,7 @@ export function readPackageFacts(text: string): PackageRead | null {
   if (proxy) {
     proxyText =
       kind === 'local' || proxy.host === 'local'
-        ? '本机直连'
+        ? `${localProxyText()}（本地代理）`
         : [textOf(proxy.host), proxy.port].filter(Boolean).join(':') || 'SOCKS5'
   }
   let credentialText = '无凭证'

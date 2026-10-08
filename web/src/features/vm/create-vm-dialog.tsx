@@ -28,6 +28,7 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { PlatformChip } from '@/components/platform-chip'
 import { dashboardQueryOptions } from '@/features/overview/queries'
+import { CreateExitField, useCreateExit } from '@/features/vm/create-exit-field'
 import {
   KERNELS,
   VM_CONCURRENCY_OPTIONS,
@@ -57,6 +58,8 @@ type CreateVmResponse = {
   vm_id?: string
   vm?: { id?: string }
   start_error?: string
+  /** 指定出口在创建瞬间没绑上（被别处占满等）。 */
+  proxy_error?: string
 }
 
 /**
@@ -118,6 +121,8 @@ export function CreateVmFields({
   const typedName = name.trim()
   const placement = usePlacement(kernel)
   const remoteGpt = !!placement.nodeId && platform === 'openai'
+  const exit = useCreateExit(placement.nodeId)
+  const wantsExit = after !== 'idle'
 
   /** 切模板：回填内核/区域/语言/并发/权重与「之后」。时区不在这里选。 */
   function applyTemplate(id: string) {
@@ -158,14 +163,19 @@ export function CreateVmFields({
           platform,
           family: platform === 'openai' ? 'codex' : 'claude',
           ...(nodeId ? { node_id: nodeId } : {}),
+          ...(wantsExit && exit.proxyId ? { proxy_id: exit.proxyId } : {}),
         }),
       })
       return {
         id: data.id || data.vm_id || data.vm?.id || id || '',
         startError: data.start_error || '',
+        proxyError: data.proxy_error || '',
       }
     },
     onSuccess: async (created) => {
+      if (created.proxyError) {
+        toast.warning(`出口未绑定：${created.proxyError}`)
+      }
       if (created.startError) {
         toast.warning(
           created.id
@@ -294,6 +304,10 @@ export function CreateVmFields({
           </SelectContent>
         </Select>
       </div>
+
+      {wantsExit ? (
+        <CreateExitField exit={exit} remote={!!placement.nodeId} />
+      ) : null}
 
       <Collapsible open={advOpen} onOpenChange={setAdvOpen}>
         <CollapsibleTrigger className='text-sm text-primary hover:underline'>

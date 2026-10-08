@@ -86,6 +86,7 @@ import {
 } from './panel-tenant.mjs'
 import {
   VM_ORIGIN,
+  canBindProxyToVm,
   assignOriginForOwner,
   clampVmCreateQuota,
   countUserCreatedVms,
@@ -161,14 +162,13 @@ import {
 import { recreateVmFiles, seedFreshCliHome } from '../vm/vm-recreate.mjs'
 import { commitVmPackage, exportVmPackage, parseVmPackage } from '../vm/vm-package.mjs'
 import { preflightNode } from '../cluster/placement.mjs'
-import { slotHost } from '../vm/slot-host.mjs'
+import { hostProxyUrlForVm, slotHost } from '../vm/slot-host.mjs'
 import { syncIpv6ProxyEgress } from '../vm/proxy-policy-runtime.mjs'
 import { writeSlotSeedFiles } from '../vm/slot-seed.mjs'
 import {
   egressEnabled,
   ensureProxyEgress,
   stopProxyEgress,
-  hostProxyUrlForVm,
   hasBoundExit,
   isLocalEgressProxy,
   dnsUpstreamChain,
@@ -2898,6 +2898,25 @@ export function createPanelHandler(ctx) {
             })
           }
         }
+        // An explicit exit (e.g. local egress for a node: that VPS's own route) replaces auto-allocation.
+        const pickedProxyId = typeof body.proxy_id === 'string' ? body.proxy_id.trim() : ''
+        if (pickedProxyId) {
+          const row = proxyPool.snapshot().proxies.find((proxy) => proxy.id === pickedProxyId)
+          const owner = ident.role === 'user' ? normalizeOwnerId(req.panelUserId) : null
+          if (!row || !canBindProxyToVm(row, { owner_user_id: owner }, { role: ident.role })) {
+            return json(res, 404, {
+              ok: false,
+              error: { code: 'proxy_not_found', message: '所选出口不存在或不能绑到此槽位' },
+            })
+          }
+          const used = Array.isArray(row.bound_vm_ids) ? row.bound_vm_ids.length : 0
+          if (!row.enabled || row.status === 'dead' || row.blocked_reason || used >= (row.bind_limit || 5)) {
+            return json(res, 409, {
+              ok: false,
+              error: { code: 'proxy_unavailable', message: '所选出口已失效或已绑满' },
+            })
+          }
+        }
         const requestedTimezone = validTimezone(body.timezone)
         const generated = generateWorkstationFingerprint(
           { id, kernel: wantKernel, timezone: requestedTimezone, locale: STANDARD_LOCALE },
@@ -3012,20 +3031,27 @@ export function createPanelHandler(ctx) {
           seedFreshCliHome(cfg.paths.project, vm)
         } catch (e) {}
         let allocated = null
-        const wantProxy = body.auto_allocate_proxy === true || startNow
+        let proxyError = null
+        const wantProxy = body.auto_allocate_proxy === true || startNow || !!pickedProxyId
         // px-local 没有 SOCKS URL，但它是合法出口；不要把它当成"未绑定"。
         const hasExit = (v) => !!(v?.proxy?.url || isLocalEgressProxy(v?.proxy))
         if (wantProxy && !hasExit(vm)) {
-          try {
-            allocated = proxyPool.allocateForVm(id, {
-              ownerUserId: vm.owner_user_id || null,
-              role: ident.role,
-            })
-            if (allocated) {
-              bindVmProxy(cfg.paths.project, id, proxyPool.getProxyForVm(id))
-              vm.proxy = getVm(cfg.paths.project, id)?.proxy || vm.proxy
-            }
-          } catch (e) {}
+          if (pickedProxyId) {
+            const bound = proxyPool.bind(pickedProxyId, id)
+            if (bound.ok) allocated = bound.proxy
+            else proxyError = bound.error || 'proxy_bind_failed'
+          } else {
+            try {
+              allocated = proxyPool.allocateForVm(id, {
+                ownerUserId: vm.owner_user_id || null,
+                role: ident.role,
+              })
+            } catch (e) {}
+          }
+          if (allocated) {
+            bindVmProxy(cfg.paths.project, id, proxyPool.getProxyForVm(id))
+            vm.proxy = getVm(cfg.paths.project, id)?.proxy || vm.proxy
+          }
         }
         // vm is written again below; carry the exit's zone so that write keeps it.
         const zoned = await fillTimezoneFromExit(id)
@@ -3069,6 +3095,7 @@ export function createPanelHandler(ctx) {
             vm: panel.publicVmBootView(summarizeVm(saved, cfg.paths.project, ctx.routingConfig)),
             allocated_proxy: panel.publicAllocatedProxy(proxyPool, allocated),
             ...(startError ? { start_error: startError } : {}),
+            ...(proxyError ? { proxy_error: proxyError } : {}),
           }),
         )
       }

@@ -317,6 +317,8 @@ export class ProxyPool {
     this._timer = null
     this._probing = false
     this._probeSockets = new Map()
+    // Node exits are not pool rows: px-local's geo is the control plane's, a node slot leaves elsewhere.
+    this._exitGeo = new Map()
     this.load()
   }
 
@@ -1069,6 +1071,22 @@ export class ProxyPool {
     p.geo_v6_city = geo.city || null
     p.geo_v6_isp = geo.isp || null
     p.geo_v6_timezone = validTimezone(geo.timezone) || null
+  }
+
+  /**
+   * Location of an exit that is not a pool row (a node slot on local egress,
+   * looked up through that node's forwarder). Cached per key for the process;
+   * failures are not cached so the next bind retries.
+   */
+  async exitGeo(key, url, { detect = true } = {}) {
+    const hit = this._exitGeo.get(key)
+    if (hit) return { ok: true, cached: true, geo: hit }
+    if (!detect) return { ok: false, error: 'exit_geo_unknown' }
+    const result = await this.geoLookup(url, { timeoutMs: this.state.config?.geo_timeout_ms })
+    if (!result?.ok) return { ok: false, error: result?.error || 'geo_lookup_failed' }
+    const geo = result.geo || {}
+    this._exitGeo.set(key, geo)
+    return { ok: true, cached: false, geo }
   }
 
   /** Detected IANA zone of one proxy, '' when unknown. */

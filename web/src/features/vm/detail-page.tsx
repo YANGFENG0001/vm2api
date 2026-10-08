@@ -48,6 +48,7 @@ import { PlatformChip, SlotIdentity } from '@/components/platform-chip'
 import { QueryGate } from '@/components/query-gate'
 import { StatusMark } from '@/components/status-mark'
 import { dashboardQueryOptions } from '@/features/overview/queries'
+import { sortedProxiesByAvailability } from '@/features/proxies/proxy-sort'
 import { proxiesQueryOptions } from '@/features/proxies/queries'
 import { routingQueryOptions } from '@/features/settings/queries'
 import { VmAccountTab } from '@/features/vm/detail-account-tab'
@@ -175,11 +176,16 @@ export function VmDetailPage() {
   })
   const pool = proxies.data?.proxies || []
   const boundId = String(proxy.id || vm.proxy_id || '')
-  const free = pool.filter((p) => {
-    if (!p.enabled || p.status === 'dead' || p.blocked_reason) return false
-    const ids = p.bound_vm_ids || (p.bound_vm_id ? [p.bound_vm_id] : [])
-    return !ids.includes(id) && ids.length < (p.bind_limit || 5)
-  })
+  // 本地代理固定第一，其余按「能不能马上用」排。
+  const free = sortedProxiesByAvailability(
+    pool.filter((p) => {
+      if (!p.enabled || p.status === 'dead' || p.blocked_reason) return false
+      const ids = p.bound_vm_ids || (p.bound_vm_id ? [p.bound_vm_id] : [])
+      return !ids.includes(id) && ids.length < (p.bind_limit || 5)
+    }),
+    id,
+    5
+  )
   const pol =
     (seed.data?.seed_policy as Record<string, unknown> | undefined) || {}
   const syncTelemetry =
@@ -362,6 +368,7 @@ export function VmDetailPage() {
             proxy={proxy}
             boundId={boundId}
             free={free}
+            pool={pool}
             bindId={bindId}
             onBindIdChange={setBindId}
             onUnbind={() =>

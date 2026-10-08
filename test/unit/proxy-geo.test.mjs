@@ -12,6 +12,7 @@ import {
 } from '../../src/lib/vm/proxy-geo.mjs'
 import { ProxyPool } from '../../src/lib/vm/proxy-pool.mjs'
 import { syncVmTimezoneFromProxy } from '../../src/lib/vm/proxy-timezone.mjs'
+import { startNodeEgressSocks, stopNodeEgressSocks } from '../../src/lib/cluster/node-egress-socks.mjs'
 
 function tmpDir(prefix = 'kin-geo-') {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix))
@@ -282,4 +283,25 @@ test('an unresolvable exit zone leaves the slot timezone alone', async () => {
   const skipped = await syncVmTimezoneFromProxy(root, pool, 'vm-04')
   assert.equal(skipped.reason, 'proxy_timezone_unknown')
   assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'vms', 'vm-04.json'), 'utf8')).timezone, 'America/Denver')
+})
+
+test('a node slot on local egress follows its node exit, not the control plane row', async (t) => {
+  const lookups = []
+  const pool = makePool(async (url) => {
+    lookups.push(url)
+    // '' = the control plane's own route (px-local row); a SOCKS URL = the node forwarder.
+    return { ok: true, geo: { timezone: url ? 'Europe/Berlin' : 'Asia/Tokyo' } }
+  })
+  const local = pool.ensureLocal().proxy
+  pool.bind(local.id, 'vm-05')
+  pool.bind(local.id, 'vm-06')
+  await startNodeEgressSocks({ clientFor: () => assert.fail('geo lookup is injected') })
+  t.after(stopNodeEgressSocks)
+  const proxy = { id: local.id, scheme: 'local', host: 'local', port: 0 }
+  const root = seedProject({ id: 'vm-05', node_id: 'node-a', proxy })
+  fs.writeFileSync(path.join(root, 'vms', 'vm-06.json'), JSON.stringify({ id: 'vm-06', proxy }))
+
+  assert.equal((await syncVmTimezoneFromProxy(root, pool, 'vm-05')).timezone, 'Europe/Berlin')
+  assert.equal((await syncVmTimezoneFromProxy(root, pool, 'vm-06')).timezone, 'Asia/Tokyo')
+  assert.match(lookups[0], /^socks5h:\/\/node-a:/)
 })

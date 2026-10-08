@@ -18,7 +18,6 @@ import {
   inspectEgressNetwork,
   inspectEgressProcess,
   iptablesPlan,
-  hostProxyUrlForVm,
   isLocalEgressProxy,
   localEgressProxyUrl,
   localEgressStatus,
@@ -31,6 +30,7 @@ import {
   startEgressProcess,
   stopEgressProcess,
 } from '../../src/lib/vm/egress.mjs'
+import { hostProxyUrlForVm } from '../../src/lib/vm/slot-host.mjs'
 
 // Process-ownership tests need the native helper so /proc/<pid>/exe identifies it.
 const egressBin = process.env.KIN_EGRESS_BIN || path.resolve(import.meta.dirname, '../../bin/kin-egress')

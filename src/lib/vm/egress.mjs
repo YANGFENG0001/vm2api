@@ -12,7 +12,6 @@ import { getDb, isDbOpen } from '../db/database.mjs'
 import { SettingsRepo } from '../db/repos/settings-repo.mjs'
 import { socksProxyUrl } from './socks-address.mjs'
 import { assertProxyAllowed, proxyBlockedReason } from './proxy-policy.mjs'
-import { isCodexVm } from './vm-kind.mjs'
 
 export const EGRESS_BIN = process.env.KIN_EGRESS_BIN || '/opt/kin-gateway/bin/kin-egress'
 export const LOCAL_EGRESS_ID = 'px-local'
@@ -477,12 +476,6 @@ export function localEgressProxyUrl(env = process.env) {
     if (value) return value.replace(/^socks5:\/\//i, 'socks5h://')
   }
   return ''
-}
-
-/** Exit for a host-side request made for this VM. Local Claude slots run in a container without proxy env, so theirs stay direct. */
-export function hostProxyUrlForVm(vm) {
-  if (!isLocalEgressProxy(vm?.proxy)) return boundProxyUrl(vm?.proxy)
-  return isCodexVm(vm) ? localEgressProxyUrl() : ''
 }
 
 function waitListen(host, port, timeoutMs = 8000) {

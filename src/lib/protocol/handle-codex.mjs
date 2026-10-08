@@ -22,7 +22,8 @@ import { extraFromCodexHeaders, codexQuotaPark, CODEX_DEFAULT_PARK_MS } from './
 import { extractOpenaiUsage } from './openai-usage.mjs'
 import { streamCodexKernel } from '../transport/codex-kernel-client.mjs'
 import { ensureCodexKernel, writeCodexKernelConfig } from '../transport/codex-kernel-supervisor.mjs'
-import { boundProxyUrl, hostProxyUrlForVm, isLocalEgressProxy } from '../vm/egress.mjs'
+import { boundProxyUrl, isLocalEgressProxy } from '../vm/egress.mjs'
+import { hostProxyUrlForVm } from '../vm/slot-host.mjs'
 import { readCodexAccounts, upsertCodexAccount } from '../vm/codex-slot.mjs'
 import {
   CODEX_APP_VERSION,

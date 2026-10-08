@@ -505,7 +505,7 @@ export function CredentialFlow() {
                     : '转发必须走槽上代理。选一条现成的，或粘贴一行新的。'
                 }
               >
-                <ImportProxyStep vmId={vmId} />
+                <ImportProxyStep vmId={vmId} nodeId={current?.node_id} />
               </Block>
             ) : null}
 
