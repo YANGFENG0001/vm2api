@@ -32,6 +32,7 @@ import {
   resetWrapRecycleState,
   beginWrapHop,
   endWrapHop,
+  requestKernelReloadWhenIdle,
 } from '../../src/lib/transport/rust-kernel-supervisor.mjs'
 import { rustKernelPaths, isNeedsRefreshResult } from '../../src/lib/transport/rust-kernel-client.mjs'
 import { OFFICIAL_CLI_VERSION } from '../../src/lib/identity/vm-identity.mjs'
@@ -636,6 +637,32 @@ test('writeKernelConfig separates container paths from host socket paths', () =>
   fs.rmSync(root, { recursive: true, force: true })
 })
 
+test('writeKernelConfig idle timeout follows the panel stream idle timeout', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kin-kernel-idle-cfg-'))
+  const prev = process.env.KIN_STREAM_IDLE_TIMEOUT
+  const idleOf = (opts) =>
+    JSON.parse(fs.readFileSync(writeKernelConfig(root, { id: 'vm-09' }, { token: 'tok', ...opts }).configPath, 'utf8'))
+      .idle_timeout_seconds
+  try {
+    delete process.env.KIN_STREAM_IDLE_TIMEOUT
+    // Default stays 180s; the panel raises it when needed.
+    assert.equal(idleOf({ routing: {} }), 180)
+    process.env.KIN_STREAM_IDLE_TIMEOUT = '900000'
+    assert.equal(idleOf({ routing: {} }), 900)
+    // Panel value wins over env and is clamped to 30s..60min.
+    assert.equal(idleOf({ routing: { failover: { stream_idle_timeout_ms: 1_200_000 } } }), 1200)
+    assert.equal(idleOf({ routing: { failover: { stream_idle_timeout_ms: 5000 } } }), 30)
+    assert.equal(idleOf({ routing: { failover: { stream_idle_timeout_ms: 99_999_999 } } }), 3600)
+    // Partial callers without routing keep the last written value.
+    idleOf({ routing: { failover: { stream_idle_timeout_ms: 1_200_000 } } })
+    assert.equal(idleOf({}), 1200)
+  } finally {
+    if (prev === undefined) delete process.env.KIN_STREAM_IDLE_TIMEOUT
+    else process.env.KIN_STREAM_IDLE_TIMEOUT = prev
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('writeKernelConfig cli-hop writes local_cli without secrets', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kin-kernel-cli-hop-cfg-'))
   const written = writeKernelConfig(
@@ -909,6 +936,47 @@ test('recycleWrapIfIdle bounces unknown and stale hops, skips fresh', async () =
   assert.equal(stale.skipped, false)
   assert.deepEqual(restarts, ['vm-05', 'vm-05'])
   resetWrapRecycleState()
+})
+
+test('requestKernelReloadWhenIdle restarts only once no job runs', async () => {
+  resetWrapRecycleState()
+  const exec = { vmId: 'vm-07', vm: { id: 'vm-07' } }
+  const restarts = []
+  const restart = async (target) => {
+    restarts.push(target.vmId)
+    return { ok: true }
+  }
+  const idle = { ok: true, ready_slots: WRAP_SLOT_MAX, closed_slots: 0 }
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 5))
+  try {
+    // Idle kernel: restart right away.
+    let req = requestKernelReloadWhenIdle(exec, { restart, health: async () => idle })
+    assert.deepEqual(await req.done, { ok: true })
+    assert.deepEqual(restarts, ['vm-07'])
+
+    // A job from another caller holds a slot: poll until it frees up.
+    let status = { ok: true, ready_slots: WRAP_SLOT_MAX - 1, closed_slots: 0 }
+    req = requestKernelReloadWhenIdle(exec, { restart, health: async () => status, pollMs: 10 })
+    await tick()
+    assert.deepEqual(restarts, ['vm-07'])
+    status = idle
+    // The poll timer is unref'd so a pending reload never holds the server open;
+    // ref'd ticks keep this test's loop alive until it fires.
+    for (let i = 0; i < 200 && restarts.length < 2; i++) await tick()
+    await req.done
+    assert.deepEqual(restarts, ['vm-07', 'vm-07'])
+
+    // A hop in this process: wait for its end even if the kernel looks idle.
+    beginWrapHop(exec)
+    req = requestKernelReloadWhenIdle(exec, { restart, health: async () => idle, pollMs: 60_000 })
+    await tick()
+    assert.deepEqual(restarts, ['vm-07', 'vm-07'])
+    endWrapHop(exec)
+    await req.done
+    assert.deepEqual(restarts, ['vm-07', 'vm-07', 'vm-07'])
+  } finally {
+    resetWrapRecycleState()
+  }
 })
 
 test('wrapSlotCount always pre-opens max native slots', () => {

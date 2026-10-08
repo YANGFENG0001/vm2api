@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { readRoutingConfigFile } from '../core/config.mjs'
+import { readRoutingConfigFile, streamIdleTimeoutMs } from '../core/config.mjs'
 import { US_TIMEZONES, validTimezone } from '../core/timezone.mjs'
 import { runtimeKind } from './runtime-kind.mjs'
 import { buildWorkerTelemetry } from './worker-telemetry.mjs'
@@ -353,6 +353,7 @@ export function writeWorkerFiles(vm, projectRoot, { transparent, routing } = {})
   const proxyUrl = onEgress || local ? '' : workerProxyUrl(vm) || ''
   if (!onEgress && !local && vm.proxy_required !== false && !proxyUrl) throw new Error('slot SOCKS5 proxy is required')
   const testEndpoints = process.env.KIN_WORKER_TEST_ENDPOINTS === '1'
+  const resolvedRouting = routing != null ? routing : readProjectRouting(projectRoot)
   const workerConfig = {
     vm_id: vm.id,
     socket_path: '/run/kin/worker.sock',
@@ -364,7 +365,7 @@ export function writeWorkerFiles(vm, projectRoot, { transparent, routing } = {})
     refresh_skew_seconds: 300,
     request_timeout_seconds: 0,
     first_byte_timeout_seconds: 600,
-    idle_timeout_seconds: 180,
+    idle_timeout_seconds: Math.ceil(streamIdleTimeoutMs(resolvedRouting) / 1000),
     max_request_bytes: 32 * 1024 * 1024,
     max_response_bytes: 64 * 1024 * 1024,
     max_event_bytes: 32 * 1024 * 1024,
@@ -380,7 +381,6 @@ export function writeWorkerFiles(vm, projectRoot, { transparent, routing } = {})
     if (oauthTokenUrl) workerConfig.oauth_token_url = oauthTokenUrl
   }
   replaceSlotOwnedFile(paths.config, JSON.stringify(workerConfig, null, 2) + '\n', vm)
-  const resolvedRouting = routing != null ? routing : readProjectRouting(projectRoot)
   const allowed = assertCliHopAllowed(vm, resolvedRouting)
   if (!allowed.ok) throw new Error(allowed.error)
   const kernel = writeKernelConfig(projectRoot, vm, {

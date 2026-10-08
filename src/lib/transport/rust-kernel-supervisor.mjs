@@ -13,6 +13,7 @@ import {
   rustKernelReachable,
   rustKernelBusy,
 } from './rust-kernel-client.mjs'
+import { streamIdleTimeoutMs } from '../core/config.mjs'
 import { OFFICIAL_CLI_VERSION } from '../identity/vm-identity.mjs'
 import { cacheTtlFromRouting, normalizeCacheTtl } from '../protocol/cache-ttl.mjs'
 import { setVmSchedulable, listVms, getVm } from '../vm/vm-registry.mjs'
@@ -329,6 +330,8 @@ export function resetWrapRecycleState() {
   wrapRecyclePending.clear()
   wrapLastHopAt.clear()
   wrapInflight.clear()
+  for (const entry of kernelReloadPending.values()) clearTimeout(entry.timer)
+  kernelReloadPending.clear()
 }
 
 function wrapVmId(exec) {
@@ -353,6 +356,7 @@ export function endWrapHop(exec, now = Date.now()) {
   const n = (wrapInflight.get(id) || 1) - 1
   if (n <= 0) {
     wrapInflight.delete(id)
+    if (kernelReloadPending.has(id)) void tryKernelReload(id)
   } else {
     wrapInflight.set(id, n)
   }
@@ -376,6 +380,71 @@ export async function awaitWrapRecycle(exec) {
   const id = wrapVmId(exec)
   const pending = wrapRecyclePending.get(id)
   if (pending) await pending
+}
+
+/**
+ * Env-only kernel settings (the JOB_IDLE_SECS job watchdog) apply on restart.
+ * Restart each kernel once nothing runs on it: a busy kernel retries when its last
+ * hop ends, or on the next poll for jobs this process does not track.
+ */
+export const KERNEL_RELOAD_POLL_MS = 15_000
+const kernelReloadPending = new Map()
+
+/** Jobs on the kernel (any caller): configured slots that are neither ready nor closed. */
+function kernelJobsRunning(exec, health) {
+  if (!rustKernelProcessUp(health)) return 0
+  if (health.recovering === true) return 1
+  const ready = Number(health.ready_slots)
+  if (!Number.isFinite(ready)) return 0
+  const total = Number(readExistingKernelConfig(rustKernelPaths(exec).configPath).slots_per_worker) || WRAP_SLOT_MAX
+  return Math.max(0, total - ready - (Number(health.closed_slots) || 0))
+}
+
+export function requestKernelReloadWhenIdle(
+  exec,
+  { restart = restartRustKernel, health = rustKernelHealth, pollMs = KERNEL_RELOAD_POLL_MS } = {},
+) {
+  const id = wrapVmId(exec)
+  if (!id) return { ok: false, reason: 'missing_vm' }
+  const prev = kernelReloadPending.get(id)
+  if (prev?.timer) clearTimeout(prev.timer)
+  let resolve
+  const done = new Promise((r) => {
+    resolve = r
+  })
+  const entry = { exec, restart, health, pollMs, timer: null, running: false, resolve }
+  kernelReloadPending.set(id, entry)
+  // A superseded request settles with the newer one's result.
+  if (prev) done.then(prev.resolve)
+  void tryKernelReload(id)
+  return { ok: true, pending: true, done }
+}
+
+async function tryKernelReload(id) {
+  const entry = kernelReloadPending.get(id)
+  if (!entry || entry.running) return
+  if (entry.timer) {
+    clearTimeout(entry.timer)
+    entry.timer = null
+  }
+  entry.running = true
+  const status = await Promise.resolve()
+    .then(() => entry.health(entry.exec, { timeoutMs: 800 }))
+    .catch(() => null)
+  entry.running = false
+  if (kernelReloadPending.get(id) !== entry) return
+  // A hop that began during the health check retries from endWrapHop.
+  if ((wrapInflight.get(id) || 0) > 0) return
+  if (kernelJobsRunning(entry.exec, status) > 0) {
+    entry.timer = setTimeout(() => void tryKernelReload(id), entry.pollMs)
+    entry.timer.unref?.()
+    return
+  }
+  kernelReloadPending.delete(id)
+  const result = await Promise.resolve()
+    .then(() => entry.restart(entry.exec))
+    .catch((error) => ({ ok: false, error: String(error?.message || error) }))
+  entry.resolve(result)
 }
 
 /** Deliberate credential/config cutover; failure recovery belongs to the watchdog. */
@@ -578,6 +647,8 @@ export function writeKernelConfig(
   const claudeBin = envBin || (dataplane === 'wrap' ? host.bins.cli : host.bins.cc)
   const tz = String(timezone || vm.timezone || previous.timezone || '').trim()
   const defaultCacheTtl = routing != null ? cacheTtlFromRouting(routing) : normalizeCacheTtl(previous.default_cache_ttl)
+  const previousIdleSeconds = Number(previous.idle_timeout_seconds)
+  const idleMs = routing == null && previousIdleSeconds > 0 ? previousIdleSeconds * 1000 : streamIdleTimeoutMs(routing)
 
   const config = {
     vm_id: vm.id,
@@ -590,7 +661,7 @@ export function writeKernelConfig(
     refresh_skew_seconds: 300,
     request_timeout_seconds: 0,
     first_byte_timeout_seconds: 600,
-    idle_timeout_seconds: 180,
+    idle_timeout_seconds: Math.ceil(idleMs / 1000),
     max_request_bytes: 32 * 1024 * 1024,
     max_response_bytes: 64 * 1024 * 1024,
     max_event_bytes: 32 * 1024 * 1024,

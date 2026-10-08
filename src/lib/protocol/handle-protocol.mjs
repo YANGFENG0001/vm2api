@@ -3,6 +3,8 @@
  * server wiring; this factory owns convert → pool → Go/Rust hop → client.
  */
 import { applyIntercept } from '../core/intercept.mjs'
+import { streamIdleTimeoutMs as idleTimeoutFromRouting } from '../core/config.mjs'
+import { applyEagerToolStreaming } from './eager-tool-streaming.mjs'
 import {
   inboundRefusalDeviceId,
   isRefusalGuardEnabled,
@@ -828,6 +830,7 @@ export function createHandleProtocol(deps) {
         }),
       })
     }
+    ctx.body = applyEagerToolStreaming(ctx.body, getRouting())
     const personaIn = ctx.body
     if (!requestContext)
       ctx.body = applyCrsUnofficialPersona(ctx.body, {
@@ -960,7 +963,10 @@ export function createHandleProtocol(deps) {
     const streamKeepaliveMs = Number(
       getRouting()?.failover?.stream_keepalive_ms ?? cfg.limits.stream_keepalive_ms ?? 15_000,
     )
-    const streamIdleTimeoutMs = Number(cfg.limits.stream_idle_timeout_ms || 180_000)
+    const streamIdleTimeoutMs = idleTimeoutFromRouting(
+      getRouting(),
+      Number(cfg.limits.stream_idle_timeout_ms) || 180_000,
+    )
     const managedKey = req.apiKeyRecord || null
     if (managedKey) {
       const gate = apiKeyStore.acquire(managedKey)

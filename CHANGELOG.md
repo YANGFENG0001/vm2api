@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.3.126 — 2026-10-09
+
+- 流空闲上限可在面板「重试与切号 → 流空闲超时」配置（`failover.stream_idle_timeout_ms`，默认 180 秒，30 秒–60 分钟；未配置时用 `KIN_STREAM_IDLE_TIMEOUT`）。网关、`kernel.json` / `worker.json` 的 `idle_timeout_seconds` 与 kernel job 看门狗共用这个值。保存后热写各槽 `kernel.json`，运行中的 rust kernel 在空闲时自动重启以读取新看门狗值（#305）。
+- kernel job 看门狗读的是不带前缀的 `JOB_IDLE_SECS`，此前文档里的 `KIN_JOB_IDLE_SECS` 从未生效。槽内 `kin-kernel` 启动脚本现在从 `kernel.json` 读取并导出它。crag 数据面与无启动脚本的槽仍是默认 180 秒；go 引擎槽的 `worker.json` 在下次启动时才更新。
+- 工具参数流式下发开关 `failover.eager_tool_streaming`（默认关，面板「重试与切号」）。开启后给自定义工具加 `eager_input_streaming: true`，上游边生成边下发大参数，避免长 `Write` 静默超时；服务端工具不动，客户端自带的值优先（#305）。
+- 统计页与日志汇总的缓存命中率分母按每行口径计算：Claude 为 input + 缓存读 + 缓存写，Codex / OpenAI 的 input 已含缓存；混用提供商按 prompt token 加权（#302，关闭 #301）。
+
+已部署机升级：更新 Node 控制面并重启一次 Node。`share/wrap-cli/kin-kernel` 启动脚本变了，**需要 `wrap-cli/sync`** 才能让看门狗跟随面板值（逐槽重启 dataplane，不要 `docker rm`）。kernel、cli-node 等二进制不变。不要覆盖 `routing.json`、`vms/`、`data/`、`.env`；新配置项缺省即旧行为。
+
 ## 1.3.125 — 2026-10-08
 
 - 托管密钥可以限定平台和勾选的虚拟机（`group_type` = all / anthropic / openai + `allowed_vms`）。调度、故障转移、Codex 选槽、`count_tokens` 与 `/v1/usage` 只落在范围内的槽；调用另一平台返回 403 `key_group_mismatch`。新增迁移 `032_api_key_group_type.sql`。
