@@ -87,6 +87,24 @@
     "session_slots": 20
   },
   "codex": {
+    "enabled": true,
+    "protocols": {
+      "openai.responses": { "mode": "native", "enabled": true },
+      "openai.chat": { "mode": "convert", "enabled": true },
+      "openai.completions": { "mode": "convert", "enabled": true },
+      "anthropic.messages": { "mode": "reject", "enabled": false }
+    },
+    "convert": {
+      "chat_to_codex": true,
+      "completions_to_codex": true,
+      "anthropic_to_codex": false
+    },
+    "clients": {
+      "official_codex": "allow",
+      "openai_compatible": "allow",
+      "claude_code": "reject",
+      "unknown": "allow"
+    },
     "quota": {
       "limit_5h": 1,
       "limit_7d": 1,
@@ -186,26 +204,6 @@
       "enabled": false,
       "bot_token": "",
       "chat_id": ""
-    }
-  },
-  "codex": {
-    "enabled": true,
-    "protocols": {
-      "openai.responses": { "mode": "native", "enabled": true },
-      "openai.chat": { "mode": "convert", "enabled": true },
-      "openai.completions": { "mode": "convert", "enabled": true },
-      "anthropic.messages": { "mode": "reject", "enabled": false }
-    },
-    "convert": {
-      "chat_to_codex": true,
-      "completions_to_codex": true,
-      "anthropic_to_codex": false
-    },
-    "clients": {
-      "official_codex": "allow",
-      "openai_compatible": "allow",
-      "claude_code": "reject",
-      "unknown": "allow"
     }
   }
 }

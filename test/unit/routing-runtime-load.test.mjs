@@ -309,6 +309,26 @@ test('OpenAI legacy migration preserves effective pins and resumes before canoni
   }
 })
 
+test('shipped routing.json loads as canonical without the OpenAI legacy rewrite', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kin-shipped-routing-'))
+  const routingFile = path.join(root, 'routing.json')
+  const shipped = fs.readFileSync(new URL('../../src/config/routing.json', import.meta.url), 'utf8')
+  fs.mkdirSync(path.join(root, 'vms'), { recursive: true })
+  fs.writeFileSync(routingFile, shipped)
+  try {
+    const doc = createRoutingRuntime({
+      cfg: { paths: { project: root } },
+      routingConfigPath: routingFile,
+    }).loadRoutingConfig()
+    assert.equal(doc.codex.enabled, true)
+    assert.equal(doc.codex.protocols['openai.responses'].mode, 'native')
+    // A duplicate top-level key would drop codex.quota and make the shipped file look legacy.
+    assert.equal(fs.readFileSync(routingFile, 'utf8'), shipped)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('OpenAI per-slot limit writes never invoke the Claude quota holder', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kin-openai-isolation-'))
   fs.mkdirSync(path.join(root, 'vms'), { recursive: true })
