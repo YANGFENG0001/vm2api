@@ -263,11 +263,27 @@ test('default needles include harvest wrappers but not persistable envelope', ()
   assert.equal(/must return strict json only/i.test(joined), true)
 })
 
-test('normalizeDistillRules reinserts harvest needles dropped from the panel list', () => {
-  const rules = normalizeDistillRules({ needles: ['<think>'] })
-  assert.equal(rules.needles.includes('<think>'), true)
+test('normalizeDistillRules reinserts harvest needles and drops bare think tags', () => {
+  const rules = normalizeDistillRules({
+    needles: ['<think>', '</think>', 'Respond in the following format: <think>'],
+  })
+  assert.equal(rules.needles.includes('<think>'), false)
+  assert.equal(rules.needles.includes('</think>'), false)
+  assert.equal(rules.needles.includes('Respond in the following format: <think>'), true)
   assert.equal(rules.needles.includes('Memory-stage-one extractor'), true)
   assert.equal(rules.needles.includes('You MUST extract durable memory now'), true)
+})
+
+test('a pasted assistant think tag is not distill', () => {
+  const hit = detectDistill({
+    inbound: inbound('</user> <assistant> <think>\nI should fix the placeholder note.\n</think>'),
+  })
+  assert.equal(hit.action, 'pass')
+})
+
+test('default needles do not include bare think tags', () => {
+  assert.equal(DEFAULT_DISTILL_RULES.needles.includes('<think>'), false)
+  assert.equal(DEFAULT_DISTILL_RULES.needles.includes('</think>'), false)
 })
 
 test('distill regexes are owned by the hard pre-filter, including official and zero', async () => {

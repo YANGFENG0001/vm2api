@@ -52,8 +52,6 @@ export const DEFAULT_DISTILL_RULES = {
     require_single_turn: true,
   },
   needles: [
-    '<think>',
-    '</think>',
     '<answer>',
     '<|begin_of_thought|>',
     '<|end_of_thought|>',
@@ -213,6 +211,13 @@ function matchFingerprints(text, fingerprints) {
   return ''
 }
 
+/** Pasted assistant transcripts contain these. They are not a distill template. */
+const BARE_THINK_NEEDLES = new Set(['<think>', '</think>'])
+
+function dropBareThinkNeedles(needles) {
+  return needles.filter((item) => !BARE_THINK_NEEDLES.has(String(item).trim().toLowerCase()))
+}
+
 function matchNeedles(text, needles) {
   const hay = String(text || '').toLowerCase()
   if (!hay) return ''
@@ -263,7 +268,7 @@ export function normalizeDistillRules(raw) {
   const err = src.error && typeof src.error === 'object' ? src.error : {}
   const st = src.structure && typeof src.structure === 'object' ? src.structure : {}
   const message = String(err.message || DISTILL_BLOCK_MESSAGE).trim() || DISTILL_BLOCK_MESSAGE
-  const needles = asStringList(src.needles, DEFAULT_DISTILL_RULES.needles)
+  const needles = dropBareThinkNeedles(asStringList(src.needles, DEFAULT_DISTILL_RULES.needles))
   const harvestMissing = HARVEST_NEEDLES.filter(
     (needle) => !needles.some((item) => String(item).toLowerCase() === needle.toLowerCase()),
   )
