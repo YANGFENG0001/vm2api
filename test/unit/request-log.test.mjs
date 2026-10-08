@@ -14,6 +14,7 @@ import {
 } from '../../src/lib/admin/request-log.mjs'
 import { ApiKeyStore } from '../../src/lib/admin/api-keys.mjs'
 import { GroupsRepo } from '../../src/lib/db/repos/groups-repo.mjs'
+import { gateVerdict } from '../../src/lib/protocol/intercept-stats.mjs'
 
 function tmpStore(mode = 'normal') {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kin-rlog-'))
@@ -585,6 +586,38 @@ test('summaries persist in sqlite across store re-open', () => {
   assert.equal(listed.length, 1)
   assert.equal(listed[0].api_key_id, 'key_p')
   assert.equal(s2.snapshot().total_rows, 1)
+})
+
+test('gate stats count every inbound request and keep the stored verdict', () => {
+  const store = tmpStore()
+  // Plain successes: error_code and final_state stay NULL.
+  logOne(store, { intercept: gateVerdict({ kind: 'pass', by: 'jev' }) })
+  logOne(store, { intercept: gateVerdict({ kind: 'pass', by: 'regex' }) })
+  logOne(store, { path: '/v1/responses', intercept: gateVerdict({ kind: 'pass', by: 'regex' }) })
+  logOne(store, { status: 401, error_code: 'invalid_api_key' })
+  logOne(store, {
+    status: 403,
+    via: 'distill-detect',
+    final_state: 'distill_blocked',
+    error_code: 'distill_blocked',
+    intercept: gateVerdict({ kind: 'block', by: 'distill', keyword: 'Memory-stage-one extractor' }),
+  })
+  logOne(store, {
+    status: 503,
+    via: 'refusal-guard',
+    final_state: 'refusal_device',
+    error_code: 'refusal_guard',
+    intercept: gateVerdict({ kind: 'block', by: 'refusal', keyword: 'device' }),
+  })
+
+  const stats = store.protocolEntryStats({ since: '1970-01-01T00:00:00.000Z' })
+  assert.equal(stats.total, 6)
+  assert.equal(stats.blocked, 2)
+  assert.equal(stats.passed, 4)
+  const passBy = Object.fromEntries(stats.passes.map((row) => [row.by, row.count]))
+  assert.deepEqual(passBy, { jev: 1, regex: 2, unknown: 1 })
+  const blockBy = Object.fromEntries(stats.blocks.map((row) => [`${row.by}:${row.keyword}`, row.count]))
+  assert.deepEqual(blockBy, { 'distill:Memory-stage-one extractor': 1, 'refusal:device': 1 })
 })
 
 test('queryNormal filters + pagination + total', () => {

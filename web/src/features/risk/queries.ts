@@ -22,6 +22,8 @@ export type GateRow = {
 /** `GET /api/panel/protocol-entry`: today's gate verdicts (Shanghai day). */
 export type GateStats = {
   since: string
+  /** Every inbound inference request today: the denominator for all shares. */
+  total: number
   blocked: number
   passed: number
   keywords: { keyword: string; count: number }[]

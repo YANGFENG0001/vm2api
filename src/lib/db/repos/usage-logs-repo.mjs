@@ -750,18 +750,25 @@ export class UsageLogsRepo {
     }
   }
 
-  /** Shanghai-day protocol gate: blocks, passes, and the words that blocked. */
+  /**
+   * Shanghai-day protocol gate: blocks, passes, and the words that blocked.
+   * `total` is every inbound inference request (warmup answers included) plus
+   * gate blocks on other paths, so each stage's share uses one denominator.
+   */
   protocolEntryStats({ since = shanghaiDayStartIso() } = {}) {
+    // COALESCE: a bare `col = x` on NULL yields NULL, and `NOT NULL` drops the row.
     const block = `(
-      error_code = 'policy_blocked'
-      OR via IN ('hard-regex', 'jev', 'distill-detect', 'refusal-guard')
-      OR final_state IN ('policy_blocked', 'distill_blocked', 'refusal_guard', 'refusal_similar', 'refusal_device')
+      COALESCE(error_code, '') = 'policy_blocked'
+      OR COALESCE(via, '') IN ('hard-regex', 'jev', 'distill-detect', 'refusal-guard')
+      OR COALESCE(final_state, '') IN ('policy_blocked', 'distill_blocked', 'refusal_guard', 'refusal_similar', 'refusal_device')
     )`
+    const inference = `path IN ('/v1/messages', '/v1/responses', '/v1/chat/completions')`
     const row = this.db
       .prepare(
         `SELECT
+           SUM(CASE WHEN ${inference} OR ${block} THEN 1 ELSE 0 END) AS total,
            SUM(CASE WHEN ${block} THEN 1 ELSE 0 END) AS blocked,
-           SUM(CASE WHEN path IN ('/v1/messages', '/v1/responses', '/v1/chat/completions')
+           SUM(CASE WHEN ${inference}
                      AND NOT ${block}
                      AND COALESCE(via, '') != 'warmup-intercept'
                 THEN 1 ELSE 0 END) AS passed
@@ -790,13 +797,8 @@ export class UsageLogsRepo {
          FROM usage_logs
          WHERE created_at >= ?
            AND (
-             (intercept IS NOT NULL AND intercept != '')
-             OR ${block}
-             OR (
-               path IN ('/v1/messages', '/v1/responses', '/v1/chat/completions')
-               AND NOT ${block}
-               AND COALESCE(via, '') != 'warmup-intercept'
-             )
+             ${block}
+             OR (${inference} AND COALESCE(via, '') != 'warmup-intercept')
            )
          GROUP BY intercept, via, error_message, blocked`,
       )
@@ -804,6 +806,7 @@ export class UsageLogsRepo {
     const folded = foldInterceptRows(grouped)
     return {
       since,
+      total: Number(row?.total || 0),
       blocked: Number(row?.blocked || 0),
       passed: Number(row?.passed || 0),
       keywords: collapseBlockKeywords(keywords),

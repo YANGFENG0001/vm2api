@@ -99,7 +99,7 @@ export function GateRail({
   const passes = stats?.passes || []
   const blocked = stats?.blocked ?? null
   const passed = stats?.passed ?? null
-  const total = blocked == null || passed == null ? null : blocked + passed
+  const total = stats?.total ?? null
   const failOpen = passes
     .filter((row) => row.by === 'fail-open')
     .reduce((sum, row) => sum + row.count, 0)
