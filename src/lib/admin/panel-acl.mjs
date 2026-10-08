@@ -14,7 +14,7 @@ export const PANEL_VIEWS = [
   'usage',
   'proxies',
   'models',
-  'protocol',
+  'risk',
   'system',
   'keys',
   'api',

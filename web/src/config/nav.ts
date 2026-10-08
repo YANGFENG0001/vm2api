@@ -7,7 +7,7 @@ export type ViewId =
   | 'billing'
   | 'proxies'
   | 'models'
-  | 'protocol'
+  | 'risk'
   | 'system'
   | 'keys'
   | 'api'
@@ -27,7 +27,7 @@ export const VIEW_TITLES: Record<ViewId, string> = {
   billing: '计费',
   proxies: '代理池',
   models: '模型',
-  protocol: '协议',
+  risk: '风险审计',
   system: 'system提示词',
   keys: '密钥',
   api: 'API',

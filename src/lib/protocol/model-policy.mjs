@@ -57,7 +57,7 @@ const CAP_HAIKU = {
 }
 
 const CAP_HAIKU_55 = {
-  context_window: 1000000,
+  context_window: 100000,
   supports_1m: false,
   thinking_mode: 'adaptive_or_enabled',
   supports_adaptive: true,
@@ -197,8 +197,8 @@ export function seedDefaultPolicy() {
       pass_context_1m: false,
     },
     params: {
-      max_tokens_default: 128000,
-      max_tokens_cap: 128000,
+      max_tokens_default: 100000,
+      max_tokens_cap: 100000,
       on_adaptive: 'passthrough',
       on_enabled: 'passthrough',
       default_effort: 'medium',
@@ -226,7 +226,11 @@ export function seedDefaultPolicy() {
       drop: [CONTEXT_1M],
       pass_context_1m: false,
     },
-    params: { max_tokens_default: 16384, max_tokens_cap: 64000, on_adaptive: 'passthrough' },
+    params: {
+      max_tokens_default: 16384,
+      max_tokens_cap: 64000,
+      on_adaptive: 'passthrough',
+    },
     aliases: [],
   })
 
@@ -240,7 +244,11 @@ export function seedDefaultPolicy() {
       drop: [CONTEXT_1M],
       pass_context_1m: false,
     },
-    params: { max_tokens_default: 32000, max_tokens_cap: 128000, on_adaptive: 'passthrough' },
+    params: {
+      max_tokens_default: 32000,
+      max_tokens_cap: 128000,
+      on_adaptive: 'passthrough',
+    },
     aliases: [],
   })
 
@@ -578,13 +586,34 @@ function persistOpus55Model(repo, stored) {
   return next
 }
 
-/** Append Haiku 5.5 onto an existing settings row. Does not reset other models. */
+/** Append or migrate Haiku 5.5 onto an existing settings row. Does not reset other models. */
 function persistHaiku55Model(repo, stored) {
   if (!stored || typeof stored !== 'object') return stored
   const seed = seedDefaultPolicy()
+  const desired = seed.models[HAIKU_55_ID]
   const models = stored.models && typeof stored.models === 'object' ? { ...stored.models } : {}
-  if (models[HAIKU_55_ID]) return stored
-  models[HAIKU_55_ID] = seed.models[HAIKU_55_ID]
+  const current = models[HAIKU_55_ID]
+  let dirty = false
+  if (!current) {
+    models[HAIKU_55_ID] = desired
+    dirty = true
+  } else {
+    const wasOldSeed =
+      Number(current.capabilities?.context_window) === 1_000_000 &&
+      Number(current.params?.max_tokens_default) === 128_000 &&
+      Number(current.params?.max_tokens_cap) === 128_000
+    if (wasOldSeed) {
+      models[HAIKU_55_ID] = deepMergeEntry(current, {
+        capabilities: { context_window: desired.capabilities.context_window },
+        params: {
+          max_tokens_default: desired.params.max_tokens_default,
+          max_tokens_cap: desired.params.max_tokens_cap,
+        },
+      })
+      dirty = true
+    }
+  }
+  if (!dirty) return stored
   const next = { ...stored, models }
   try {
     repo.set(SETTINGS_KEY, next)
