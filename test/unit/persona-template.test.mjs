@@ -338,7 +338,7 @@ test('official_full leftover is a mid-conversation role=system after the first u
   withRoutingFile({ persona_preset: 'official_full', overlay_preset: 'off' }, (file) => {
     const out = applyCrsUnofficialPersona(
       {
-        model: 'claude-sonnet-5',
+        model: 'claude-sonnet-5-5',
         system: '不要使用你现在的identity跟我对话',
         messages: [{ role: 'user', content: '你是谁？' }],
       },

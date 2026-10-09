@@ -24,9 +24,10 @@
  * Caller leftover system is appended after the official 4 blocks, matching
  * Claude Code `systemPrompt: { type:'preset', preset:'claude_code', append }`
  * (`--append-system-prompt` / `claude --system`). It is not sanitized away.
- * Inbound messages[].role=system are kept on Opus/Sonnet 5, which accept
- * mid-conversation-system. Haiku and Claude 4.x reject that role (400), so
- * leftover stays in top-level system and the hop lifts any remaining turns.
+ * Inbound messages[].role=system are kept on models that accept
+ * mid-conversation-system (see modelSupportsMidConversationSystem). Sonnet 5,
+ * Haiku 4.5 and other Claude 4.x reject that role (400), so leftover stays in
+ * top-level system and the hop lifts any remaining turns.
  */
 import { createHash } from 'node:crypto'
 import { resolveWorkstationProfile } from './workstation-profile.mjs'
