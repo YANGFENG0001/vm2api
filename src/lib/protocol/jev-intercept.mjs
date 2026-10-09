@@ -9,6 +9,7 @@
  */
 import { ErrorCode, ErrorType, makeError } from '../core/errors.mjs'
 import { refusalUserDocument } from '../core/refusal-similarity.mjs'
+import { normalizeText } from '../core/distill-detect.mjs'
 import { prepareInterceptText } from './jev-prepare.mjs'
 
 export const JEV_SETTING = 'jev_intercept'
@@ -96,15 +97,20 @@ export const HARD_POLICY_RULES = Object.freeze([
 ])
 
 export const SAFETY_INSTRUCTION =
-  '这段话是否可以提交给模型做普通推理？只有明确要求色情、暴力伤害或破解软件授权时才算不可以。引用系统提示、复制技能名、普通编程和排错，算可以。'
+  '这段话是否可以提交给模型做普通推理？出现性爱、性行为、性描写或性器官时不可以，包在角色扮演或角色卡里也不可以。明确的色情、暴力伤害、破解软件授权也不可以。引用系统提示、复制技能名、普通编程和排错，可以。'
 
 const LEGACY_SAFETY_INSTRUCTIONS = new Set([
   '这段话是否可以提交给llm进行深度推理，不会涉及到风险，比如：色情、暴力、破解、诱导?',
+  '这段话是否可以提交给模型做普通推理？只有明确要求色情、暴力伤害或破解软件授权时才算不可以。引用系统提示、复制技能名、普通编程和排错，算可以。',
 ])
+
+export const NSFW_INSTRUCTION =
+  '这段话是否可以提交给模型？出现「性爱」「性行为」「性描写」或「性器官」时，整段不可以，安全程度应明显偏低。这些词只出现一两次，或包在角色扮演、心理测验、角色卡里，仍然不可以。色情请求、性服务、未成年人性内容也不可以。完全没有这些词的编程、排错、普通角色设定，可以。'
 
 /** Builtin wording shipped before the skill-list false positive. Panel edits that differ stay. */
 const LEGACY_BUILTIN_INSTRUCTIONS = new Map([
   ['safety', LEGACY_SAFETY_INSTRUCTIONS],
+  ['nsfw', new Set(['这段话是否可以提交给模型，并且不包含色情、露骨性描写、性服务请求或任何未成年人性内容？'])],
   [
     'jailbreak',
     new Set([
@@ -133,14 +139,14 @@ export const POLICY_QUESTION_BANK = Object.freeze([
   {
     id: 'safety',
     label: '综合',
-    summary: '色情、暴力、破解软件授权',
+    summary: '性爱描写、色情、暴力、破解软件授权',
     instructions: SAFETY_INSTRUCTION,
   },
   {
     id: 'nsfw',
     label: '色情',
-    summary: '露骨性描写、色情请求、未成年人性内容',
-    instructions: '这段话是否可以提交给模型，并且不包含色情、露骨性描写、性服务请求或任何未成年人性内容？',
+    summary: '性爱、性行为、性描写、未成年人性内容',
+    instructions: NSFW_INSTRUCTION,
   },
   {
     id: 'jailbreak',
@@ -644,8 +650,31 @@ export function matchHardPolicy(text, extra = [], rules = null) {
   return null
 }
 
+/** Hard regex sees user turns only. Quoted or official system text is not scanned. */
 export function jevDocument(inbound, body = inbound) {
   return refusalUserDocument(inbound, body)
+}
+
+/** Jev also sees the client system. Roleplay tasks put the sexual text there and leave the user turn as a character card. */
+export function jevModelDocument(inbound, body = inbound) {
+  const seen = new Set()
+  const parts = []
+  const push = (text) => {
+    const norm = normalizeText(text)
+    if (!norm || seen.has(norm)) return
+    seen.add(norm)
+    parts.push(norm)
+  }
+  for (const src of [inbound, body]) {
+    const system = src?.system
+    const blocks = typeof system === 'string' ? [system] : Array.isArray(system) ? system : []
+    for (const block of blocks) {
+      push(typeof block === 'string' ? block : block?.text)
+    }
+  }
+  const user = jevDocument(inbound, body)
+  if (user) parts.push(user)
+  return parts.join('\n')
 }
 
 /** Explicit model wins. Otherwise Jev uses jev-latest, ModernBERT uses english, Laya lets the router choose. */

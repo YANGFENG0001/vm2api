@@ -226,9 +226,18 @@ Claude PATCH `max_sessions` 返回 400 `claude_max_sessions_forbidden`；OpenAI 
 | GET | `/request-logs/:request_id` |
 | GET | `/request-logs/:request_id/attempts` |
 
-创建密钥只在响应里明文出现一次。存储为 HMAC 索引。`group_type` 为 `all`（默认，全局可调度）、`anthropic` 或 `openai`。后两个必须带 `allowed_vms`（该平台的 VM id，可多台）。缺字段的旧密钥视为 `all`。`GET /api-keys/:id/stats` 是该密钥近 30 天用量：上海日桶、模型分布、VM 分布。不是 VM 的上游额度窗口。
+创建密钥只在响应里明文出现一次。存储为 HMAC 索引。`group_type` 为 `all`（默认，全局可调度）、`anthropic` 或 `openai`。后两个必须带 `allowed_vms`（该平台的 VM id，可多台）。`vm_pool_id` 绑定命名账号池：成员以池为准，不复制到密钥；`allowed_vms` 被清空。池停用、为空或不存在时请求返回 403 `vm_pool_unavailable`，不回落到全局池。改成员或解除绑定对下一次请求生效，包括已有粘性会话。一台槽只属于一个池。缺字段的旧密钥视为 `all`。`GET /api-keys/:id/stats` 是该密钥近 30 天用量：上海日桶、模型分布、VM 分布。不是 VM 的上游额度窗口。
 
 attempts：每次选中的 VM/账号、错误域、cooldown、提交边界、终态。`normal` 摘要；`debug` 另存脱敏 body。`X-Request-ID` 回写。`X-Kin-Debug` / `X-Kin-Log` 可单请求覆盖。
+
+### 账号池
+
+| 方法 | 路径 |
+|------|------|
+| GET/POST | `/vm-pools` |
+| PATCH/DELETE | `/vm-pools/:id` |
+
+仅 admin。POST/PATCH 字段：`name`（1–40）、`enabled`、`vm_ids`（整表替换；省略则不动成员）。槽不存在 400 `vm_pool_vm_unknown`；槽已在别的池 409 `vm_in_other_pool`；重名 409 `vm_pool_name_taken`。仍有密钥绑定时 DELETE 409 `vm_pool_in_use`，不会把这些密钥放开成全局。
 
 ### 协议字段（对齐 Sub2API usage_logs）
 

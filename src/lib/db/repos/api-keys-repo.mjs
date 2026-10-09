@@ -33,6 +33,7 @@ const COLUMNS = [
   'category',
   'group_type',
   'allowed_vms',
+  'vm_pool_id',
   'key_secret',
   'user_id',
   'group_id',

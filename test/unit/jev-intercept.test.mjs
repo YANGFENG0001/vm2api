@@ -10,10 +10,13 @@ import {
   matchHardPolicy,
   normalizeJevConfig,
   parsePolicyDecision,
-  SAFETY_INSTRUCTION,
-  policyModelsUrl,
   publicJevConfig,
   questionsFor,
+  SAFETY_INSTRUCTION,
+  NSFW_INSTRUCTION,
+  jevDocument,
+  jevModelDocument,
+  policyModelsUrl,
   resolvedPolicyModel,
   validateJevPatch,
 } from '../../src/lib/protocol/jev-intercept.mjs'
@@ -24,6 +27,7 @@ import {
   keywordFromBlockMessage,
 } from '../../src/lib/protocol/intercept-stats.mjs'
 import { evaluateProtocolIntercept, runProtocolIntercept } from '../../src/lib/protocol/intercept-gate.mjs'
+import { refusalUserDocument } from '../../src/lib/core/refusal-similarity.mjs'
 
 const DEVICE = 'device-12345678'
 
@@ -467,6 +471,27 @@ test('stored builtin questions pick up the new wording; a panel edit stays', () 
     questions: [{ id: 'safety', instructions: custom, enabled: true }],
   })
   assert.equal(kept.questions[0].instructions, custom)
+})
+
+test('jev reads the client system, and the previous nsfw sentence upgrades', () => {
+  const body = {
+    system: [{ type: 'text', text: '情景里写了性爱。' }],
+    messages: [{ role: 'user', content: '角色卡：性别女。' }],
+  }
+  assert.equal(jevDocument(body).includes('性爱'), false)
+  const doc = jevModelDocument(body)
+  assert.match(doc, /性爱/)
+  assert.match(doc, /性别女/)
+  assert.equal(refusalUserDocument(body).includes('性爱'), false)
+  const legacy = '这段话是否可以提交给模型，并且不包含色情、露骨性描写、性服务请求或任何未成年人性内容？'
+  const upgraded = normalizeJevConfig({
+    questions: [{ id: 'nsfw', label: '色情', summary: 'old', instructions: legacy, enabled: true }],
+  })
+  assert.equal(upgraded.questions[0].instructions, NSFW_INSTRUCTION)
+  const custom = normalizeJevConfig({
+    questions: [{ id: 'nsfw', instructions: '自定义色情问句', enabled: true }],
+  })
+  assert.equal(custom.questions[0].instructions, '自定义色情问句')
 })
 
 test('quoting a skill list is not a hard rule', () => {

@@ -23,7 +23,7 @@ import { countTokensViaWorker } from '../transport/go-worker-client.mjs'
 import { apiKeyBetaHeader, setupTokenBetaHeader } from './claude-code-betas.mjs'
 import { listQuotaFromHeaders, publicUsageWindow, usageWindowsEmpty } from '../pool/quota-window.mjs'
 import { ownerScopeFromRequest } from '../admin/resource-owner.mjs'
-import { keyScopeFromRequest } from '../admin/key-scope.mjs'
+import { keyScopeFromRequest, vmPoolDenial } from '../admin/key-scope.mjs'
 import { detectInboundPlatform } from './platform-detect.mjs'
 import { resolveInboundIdentity } from '../identity/identity-rewrite.mjs'
 export function countTokensUnsupportedError() {
@@ -110,6 +110,8 @@ export async function peekCurrentAccount({
     return { ok: false, code: 'no_eligible_accounts' }
   }
   const keyScope = keyScopeFromRequest(req)
+  const poolDenial = vmPoolDenial(keyScope)
+  if (poolDenial) return { ok: false, code: ErrorCode.VM_POOL_UNAVAILABLE, message: poolDenial.message }
   // Same gate as Messages: a platform-scoped key must not hop to the other platform's VMs.
   if (platform && keyScope.group_type !== 'all' && keyScope.group_type !== platform) {
     return { ok: false, code: ErrorCode.KEY_GROUP_MISMATCH, group_type: keyScope.group_type }
@@ -131,6 +133,15 @@ function sendPoolFail(res, json, peeked) {
       type: ErrorType.PERMISSION,
       code,
       message: `此密钥仅可调用 ${peeked.group_type}`,
+      status: 403,
+    })
+    return json(res, 403, err.body)
+  }
+  if (code === ErrorCode.VM_POOL_UNAVAILABLE) {
+    const err = makeError({
+      type: ErrorType.PERMISSION,
+      code,
+      message: peeked?.message || '账号池不可用',
       status: 403,
     })
     return json(res, 403, err.body)

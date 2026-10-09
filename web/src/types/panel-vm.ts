@@ -51,6 +51,8 @@ export type VmProxySnap = {
   created_at?: string
   kind?: 'local' | 'socks5' | string
   scheme?: string
+  /** 透明 TCP 把唯一 DNS 应答改写成 SOCKS 主机名。默认关。 */
+  domain_forward?: boolean
   /** 出口地理位置（IPv4）；从未检测过为 null。 */
   geo?: ProxyGeo | null
   /** 公网 IPv6 出口地理位置；从未检测过为 null。 */

@@ -2673,3 +2673,38 @@ test('peekAccount honors the key scope', async (t) => {
   const none = await pool.peekAccount({ keyScope: { group_type: 'openai', allowed_vms: ['vm-02'] } })
   assert.equal(none.ok, false)
 })
+
+test('a vm pool drops a sticky VM that is no longer a member', async (t) => {
+  const root = project()
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const unbound = []
+  const pool = scheduler(root, {
+    stickyRouter: {
+      resolve: () => ({ vmId: 'vm-01', accountId: 'account-1' }),
+      unbind: (key) => unbound.push(key),
+    },
+  })
+  const scope = {
+    group_type: 'all',
+    vm_pool_id: 'pool_abcd1234',
+    allowed_vms: ['vm-02'],
+    vm_pool_error: null,
+  }
+  const selected = await pool.selectAndReserve({
+    model: 'claude-haiku-4-5',
+    allowWait: false,
+    stickyKey: 'sess-left',
+    keyScope: scope,
+  })
+  assert.equal(selected.ok, true)
+  assert.equal(selected.vmId, 'vm-02')
+  assert.deepEqual(unbound, ['sess-left'])
+  selected.release()
+  const blocked = await pool.selectAndReserve({
+    model: 'claude-haiku-4-5',
+    allowWait: false,
+    keyScope: { ...scope, allowed_vms: [], vm_pool_error: 'disabled' },
+  })
+  assert.equal(blocked.ok, false)
+  assert.equal(blocked.vmId, undefined)
+})

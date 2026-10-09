@@ -414,6 +414,7 @@ export class ProxyPool {
       created_at: p.created_at,
       kind: isLocalEgressProxy(p) ? 'local' : 'socks5',
       scheme: isLocalEgressProxy(p) ? 'local' : p.scheme || 'socks5',
+      domain_forward: !!p.domain_forward,
       geo: proxyGeoOf(p),
       geo_v6: proxyGeoV6Of(p),
     }
@@ -671,7 +672,7 @@ export class ProxyPool {
     if (!p) return { ok: false, error: 'proxy_not_found' }
     const has = (k) => Object.prototype.hasOwnProperty.call(patch, k)
     const connection = ['host', 'port', 'username', 'password'].some(has)
-    if (!connection && !has('label')) {
+    if (!connection && !has('label') && !has('domain_forward')) {
       return { ok: false, error: 'no_editable_fields' }
     }
     let label = p.label || null
@@ -680,10 +681,18 @@ export class ProxyPool {
       label = String(patch.label || '').trim() || null
       if (label && label.length > PROXY_LABEL_MAX) return { ok: false, error: 'label_too_long', max: PROXY_LABEL_MAX }
     }
+    let domainForward = !!p.domain_forward
+    if (has('domain_forward')) {
+      if (typeof patch.domain_forward !== 'boolean') return { ok: false, error: 'invalid_domain_forward' }
+      if (patch.domain_forward && isLocalEgressProxy(p)) return { ok: false, error: 'domain_forward_unsupported' }
+      domainForward = patch.domain_forward
+    }
+    const domainChanged = domainForward !== !!p.domain_forward
     if (!connection) {
       p.label = label
+      p.domain_forward = domainForward
       this.save()
-      return { ok: true, proxy: this.publicProxy(p), connection_changed: false }
+      return { ok: true, proxy: this.publicProxy(p), connection_changed: false, domain_forward_changed: domainChanged }
     }
     const username = has('username') ? patch.username : p.username
     // SOCKS5 has no password-only auth: socks5Record() drops the password
@@ -711,8 +720,9 @@ export class ProxyPool {
     // store. Rewrite it to host:port so editing also cleans that up.
     p.raw = socksEndpoint(next.host, next.port)
     p.label = label
+    p.domain_forward = domainForward
     this.save()
-    return { ok: true, proxy: this.publicProxy(p), connection_changed: true }
+    return { ok: true, proxy: this.publicProxy(p), connection_changed: true, domain_forward_changed: domainChanged }
   }
 
   updateConfig(patch = {}) {

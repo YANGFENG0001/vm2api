@@ -453,6 +453,9 @@ test('egress config carries dns_upstream only when configured', () => {
   assert.equal(JSON.parse(fs.readFileSync(a.configPath, 'utf8')).dns_upstream, undefined)
   const b = startEgressProcess({ ...base, proxyId: 'px-b', dnsUpstream: '8.8.8.8:53,1.1.1.1:53' })
   assert.equal(JSON.parse(fs.readFileSync(b.configPath, 'utf8')).dns_upstream, '8.8.8.8:53,1.1.1.1:53')
+  const c = startEgressProcess({ ...base, proxyId: 'px-c', domainForward: true })
+  assert.equal(JSON.parse(fs.readFileSync(c.configPath, 'utf8')).domain_forward, true)
+  assert.equal(JSON.parse(fs.readFileSync(a.configPath, 'utf8')).domain_forward, undefined)
   fs.rmSync(root, { recursive: true, force: true })
 })
 

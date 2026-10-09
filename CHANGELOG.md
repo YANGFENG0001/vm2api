@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.134 — 2026-10-09
+
+- 命名账号池（`/api/panel/vm-pools`）：多把密钥绑定同一池，成员只在池上维护。调度、故障转移、排队和粘性会话都限制在当前成员内；池停用、为空或不存在返回 403 `vm_pool_unavailable`，不回落全局。未绑定的密钥仍按原来的 `group_type` / `allowed_vms`。迁移 `034_vm_pools.sql`（#320）。
+- 代理可开「域名转发」（`domain_forward`）。kin-egress 只在本助手刚答过、且该 IP 只对应一个主机名时，把透明 TCP 的 SOCKS CONNECT 写成主机名；故意的 IP 字面量保持原样，多个主机名共享同一地址则拒绝猜测。默认关闭。IPv6 代理地址和这条开关是两件事。迁移 `035_proxy_domain_forward.sql`。打开开关时只重启该出口的 kin-egress，不重载槽位 worker（#322）。
+
+已部署机升级：更新 Node 控制面、`web/dist` 和 `bin/kin-egress`，重启一次 Node。启动时执行迁移 `034_vm_pools.sql`、`035_proxy_domain_forward.sql`。不必 `wrap-cli/sync`，不要动槽容器。不要覆盖 `routing.json`、`vms/`、`data/`、`.env`。
+
 ## 1.3.133 — 2026-10-09
 
 - 遥测只读 `seed_policy.telemetry_disabled === false`。`disable_nonessential_traffic` 与 `do_not_track` 由这一位派生，不再单独作为开关或判定依据。虚拟机页「遥测」开关在默认开时为开；详情状态同一位，进程是否在跑另计。

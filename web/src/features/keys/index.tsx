@@ -23,6 +23,7 @@ import { PageHeader } from '@/components/page-header'
 import { TableSkeleton } from '@/components/page-skeletons'
 import { QueryGate } from '@/components/query-gate'
 import { StatusMark } from '@/components/status-mark'
+import { meQueryOptions } from '@/features/auth/queries'
 import { apiKeysQueryOptions } from '@/features/keys/queries'
 import { vmsListQueryOptions } from '@/features/vm/queries'
 import {
@@ -38,10 +39,14 @@ import { KeyLimitsDialog } from './key-limits-dialog'
 import { keyLimitsPayload, type KeyLimitsDraft } from './key-payload'
 import { KeyRevealDialog, type RevealedKey } from './key-reveal-dialog'
 import { KeyStatsDialog } from './key-stats-dialog'
+import { VmPoolsCard, vmPoolsQueryOptions } from './vm-pools-card'
 
 export function KeysPage() {
   const qc = useQueryClient()
   const q = useQuery(apiKeysQueryOptions())
+  const me = useQuery(meQueryOptions())
+  const isAdmin = me.data?.role === 'admin'
+  const pools = useQuery({ ...vmPoolsQueryOptions(), enabled: isAdmin })
   const vms = useQuery(vmsListQueryOptions())
   const vmItems = vms.data?.items || []
   const [createOpen, setCreateOpen] = useState(false)
@@ -193,6 +198,7 @@ export function KeysPage() {
       title={VIEW_TITLES.keys}
       extra={<Button onClick={() => setCreateOpen(true)}>生成</Button>}
     >
+      {isAdmin ? <VmPoolsCard vms={vmItems} /> : null}
       <QueryGate
         loading={q.isLoading}
         error={q.error}
@@ -254,6 +260,7 @@ export function KeysPage() {
         onOpenChange={setCreateOpen}
         pending={create.isPending}
         vms={vmItems}
+        pools={isAdmin ? pools.data?.pools || [] : undefined}
         onSubmit={(draft) => create.mutate(draft)}
       />
       <KeyLimitsDialog
@@ -264,6 +271,7 @@ export function KeysPage() {
         }}
         initial={editing}
         vms={vmItems}
+        pools={isAdmin ? pools.data?.pools || [] : undefined}
         pending={edit.isPending}
         onSubmit={(draft) => {
           if (!editId) return
@@ -435,6 +443,7 @@ function KeyRow({
 }
 
 function scopeText(item: ApiKeyItem): string {
+  if (item.vm_pool_id) return `账号池 · ${item.vm_pool_name || item.vm_pool_id}`
   if (item.group_type === 'anthropic')
     return `Anthropic · ${item.allowed_vms?.length || 0} 台`
   if (item.group_type === 'openai')

@@ -145,7 +145,7 @@ test('a platform-scoped key cannot count tokens on the other platform and peeks 
   assert.equal(seen.length, 0)
   await handleUserCountTokens(scopedReq('anthropic'), {}, deps)
   assert.equal(cap.calls[1].status, 200)
-  assert.deepEqual(seen[0], { group_type: 'anthropic', allowed_vms: ['vm-02'] })
+  assert.deepEqual(seen[0], { group_type: 'anthropic', allowed_vms: ['vm-02'], vm_pool_id: null })
 })
 
 test('distill count_tokens returns distill_blocked and never peeks or hops', async () => {

@@ -53,7 +53,7 @@ import { classifyClaudeRequestPurpose, prepareClassifierBody, classifierRequestS
 import { summarizeBody, redactHeaders, presentedApiKeyForLog } from '../admin/request-log.mjs'
 import { reasoningEffortOf, sessionIdForLog } from './log-fields.mjs'
 import { ownerScopeFromRequest } from '../admin/resource-owner.mjs'
-import { keyScopeFromRequest } from '../admin/key-scope.mjs'
+import { keyScopeFromRequest, vmPoolDenial } from '../admin/key-scope.mjs'
 import {
   resolveInferenceEngine,
   resolveOfficialCcInference,
@@ -576,6 +576,19 @@ export function createHandleProtocol(deps) {
       return json(res, errorResult.status, errorResult.body)
     }
     const keyScope = keyScopeFromRequest(req)
+    const poolDenial = vmPoolDenial(keyScope)
+    if (poolDenial) {
+      stats.errors++
+      const errorResult = makeError({
+        type: ErrorType.PERMISSION,
+        code: ErrorCode.VM_POOL_UNAVAILABLE,
+        message: poolDenial.message,
+        status: 403,
+      })
+      logBag.error_code = ErrorCode.VM_POOL_UNAVAILABLE
+      logBag.error_message = errorResult.body?.error?.message || null
+      return json(res, 403, errorResult.body)
+    }
     if (keyScope.group_type !== 'all' && keyScope.group_type !== platform.platform) {
       stats.errors++
       const errorResult = makeError({

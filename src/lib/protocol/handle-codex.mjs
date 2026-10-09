@@ -5,7 +5,7 @@ import path from 'node:path'
 import { getVm, listVms, persistCodexUsage, syncCodexQuotaSchedule } from '../vm/vm-registry.mjs'
 import { isValidVmId } from '../vm/vm-file.mjs'
 import { isCodexProtocolAllowed, isCodexVm, normalizeCodexRouting } from './codex-route.mjs'
-import { keyAllowsVm, keyScopeFromRequest } from '../admin/key-scope.mjs'
+import { keyAllowsVm, keyScopeFromRequest, vmPoolDenial } from '../admin/key-scope.mjs'
 import { normalizeOpenAIQuotaPolicy } from '../pool/openai-quota-policy.mjs'
 import { restrictCodexClient } from './codex-restriction.mjs'
 import {
@@ -162,6 +162,8 @@ export function pickCodexCandidates(
   const model = body?.model || null
   const routingPolicy = normalizeCodexRouting(routing.codex || routing).quota
   const scope = keyScopeFromRequest(req)
+  const poolDenial = vmPoolDenial(scope)
+  if (poolDenial) return { error: 'vm_pool_unavailable', message: poolDenial.message, ids: [], candidates: [] }
   if (scope.group_type === 'anthropic') return { error: 'key_group_mismatch', ids: [], candidates: [] }
   if (pin) {
     const vm = getVm(projectRoot, pin)
@@ -186,6 +188,9 @@ export function pickCodexCandidates(
   const bound = sessionKey ? stickyRouter?.resolve?.(sessionKey) : null
   const vms = listVms(projectRoot, { codex: { quota: routingPolicy } }).filter((vm) => keyAllowsVm(scope, vm))
   const continuesResponse = !!body?.previous_response_id && !!bound?.vmId
+  if (scope.vm_pool_id && vms.length === 0 && !continuesResponse) {
+    return { error: 'vm_pool_unavailable', message: '账号池没有可调度的 GPT 槽位', ids: [], candidates: [] }
+  }
   const ordered = orderCodexSessionSlots(continuesResponse ? vms.filter((vm) => vm.id === bound.vmId) : vms, {
     boundVmId: bound?.vmId || null,
     sessionKey,
@@ -720,6 +725,15 @@ function rejectCodexAdmission({ res, json, stats, logBag, picked, model }) {
         type: 'permission_error',
         code: 'key_group_mismatch',
         message: '此密钥不能调用 openai',
+      },
+    })
+  }
+  if (picked.error === 'vm_pool_unavailable') {
+    return json(res, 403, {
+      error: {
+        type: 'permission_error',
+        code: 'vm_pool_unavailable',
+        message: picked.message || '账号池不可用',
       },
     })
   }

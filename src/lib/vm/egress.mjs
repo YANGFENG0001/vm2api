@@ -355,6 +355,7 @@ export function startEgressProcess({
   bin = EGRESS_BIN,
   dnsUpstream = '',
   dnsEmptyTypes = [],
+  domainForward = false,
 }) {
   const blocked = proxyBlockedReason({ url: proxyUrl })
   if (blocked) return { ok: false, error: blocked }
@@ -374,7 +375,8 @@ export function startEgressProcess({
         old.listen_dns === listenDns &&
         old.proxy_url === proxyUrl &&
         (old.dns_upstream || '') === dnsUpstream &&
-        JSON.stringify(old.dns_empty_types || []) === JSON.stringify(dnsEmptyTypes)
+        JSON.stringify(old.dns_empty_types || []) === JSON.stringify(dnsEmptyTypes) &&
+        !!old.domain_forward === !!domainForward
       ) {
         return { ok: true, pid: existing, reused: true, configPath: cfgPath }
       }
@@ -394,6 +396,7 @@ export function startEgressProcess({
   }
   if (dnsUpstream) cfg.dns_upstream = dnsUpstream
   if (dnsEmptyTypes.length) cfg.dns_empty_types = dnsEmptyTypes
+  if (domainForward) cfg.domain_forward = true
   fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n', { mode: 0o600 })
   const child = spawn(bin, ['-config', cfgPath], {
     detached: true,
@@ -565,6 +568,7 @@ export function ensureProxyEgress(
     listenHost,
     dnsUpstream,
     dnsEmptyTypes,
+    domainForward: proxy?.domain_forward === true,
   })
   if (!started.ok) return started
   if (!waitListen(listenHost, ports.tcp))

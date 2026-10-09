@@ -20,6 +20,7 @@ import {
   classifyJev,
   isPolicyBlockMemory,
   jevDocument,
+  jevModelDocument,
   matchHardPolicy,
   policyBlockError,
 } from './jev-intercept.mjs'
@@ -147,6 +148,10 @@ export async function evaluateProtocolIntercept({
     stripReminders: jev?.strip_reminders !== false,
     expandBase64: jev?.expand_base64 !== false,
   })
+  const modelDocument = prepareInterceptText(jevModelDocument(inbound, body), {
+    stripReminders: jev?.strip_reminders !== false,
+    expandBase64: jev?.expand_base64 !== false,
+  })
   const distillOn = distillRules?.enabled !== false
   const hardOn = jev?.hard_regex_enabled !== false
   const rules = hardRulesFor(inbound, body, jev, distillOn)
@@ -232,7 +237,7 @@ export async function evaluateProtocolIntercept({
   }
 
   if (jev?.enabled) {
-    const verdict = await classifyJev(document, jev, fetchImpl)
+    const verdict = await classifyJev(modelDocument, jev, fetchImpl)
     if (verdict.action === 'block') {
       const error = policyBlockError(requestId)
       return block({
