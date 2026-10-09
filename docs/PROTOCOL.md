@@ -2,6 +2,8 @@
 
 对齐 `src/lib/protocol/*`、`src/lib/identity/crs-persona.mjs`、`src/server.mjs` 的 `handleProtocol`。日期 2026-08-26。
 
+进槽前的封控拦截不在本文，见 [RISK.md](RISK.md)。
+
 上游 hop 始终 `stream:true`。客户端 SSE 透传；非流或 `x-kin-delivery: verified` 则缓冲到 `message_stop` 再聚合。
 
 ## 官方 Claude Code 判定
