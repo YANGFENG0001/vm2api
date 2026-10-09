@@ -64,6 +64,7 @@ export function VmProxyTab(props: VmProxyTabProps) {
   const vpsIp = useVpsIp(vm.node_id, pool)
   // 本地代理行的地理是控制面那台；节点槽从节点出网，那份地理不代表它。
   const nodeLocal = local && !!vm.node_id
+  const selectedId = bindId || free[0]?.id || ''
 
   return (
     <TabsContent value='proxy' className='space-y-3 pt-4'>
@@ -211,10 +212,7 @@ export function VmProxyTab(props: VmProxyTabProps) {
       </div>
       {free.length ? (
         <div className='flex gap-2'>
-          <Select
-            value={bindId || free[0].id || ''}
-            onValueChange={onBindIdChange}
-          >
+          <Select value={selectedId} onValueChange={onBindIdChange}>
             <SelectTrigger className='w-64'>
               <SelectValue placeholder='选择出口' />
             </SelectTrigger>
@@ -226,7 +224,11 @@ export function VmProxyTab(props: VmProxyTabProps) {
               ))}
             </SelectContent>
           </Select>
-          <Button size='sm' onClick={onBind}>
+          <Button
+            size='sm'
+            onClick={onBind}
+            disabled={!selectedId || selectedId === boundId}
+          >
             绑定
           </Button>
         </div>

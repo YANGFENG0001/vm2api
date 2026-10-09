@@ -927,8 +927,6 @@ export async function finalizeOfficialCcTelemetry(
   const seed = defaultSeedPolicy({
     ...(vm.seed_policy || {}),
     telemetry_disabled: enable ? false : vm.seed_policy?.telemetry_disabled !== false,
-    disable_nonessential_traffic: enable ? true : vm.seed_policy?.telemetry_disabled === false,
-    do_not_track: enable ? false : vm.seed_policy?.do_not_track !== false,
   })
   vm.seed_policy = seed
   vm.updated_at = new Date().toISOString()

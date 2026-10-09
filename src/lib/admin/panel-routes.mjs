@@ -70,7 +70,12 @@ import {
   resetGptModelPolicy,
 } from '../protocol/gpt-model-policy.mjs'
 import { refreshCodexAccessToken } from '../protocol/codex-models.mjs'
-import { defaultSeedPolicy, seedTelemetryContract, standardSeedPolicy } from '../protocol/seed-policy.mjs'
+import {
+  defaultSeedPolicy,
+  isTelemetryEnabled,
+  seedTelemetryContract,
+  standardSeedPolicy,
+} from '../protocol/seed-policy.mjs'
 
 import { runVmTestChat, resolveTestModels, syncCodexCatalog } from './vm-test-chat.mjs'
 import { publicKeyView } from './api-keys.mjs'
@@ -2630,15 +2635,9 @@ export function createPanelHandler(ctx) {
         if (!fs.existsSync(vmPath)) return json(res, 404, { ok: false, error: { message: 'vm not found' } })
         const body = await readBody(req, 256 * 1024)
         const vm = JSON.parse(fs.readFileSync(vmPath, 'utf8'))
-        const telemetryWasOff = (vm.seed_policy || {}).telemetry_disabled !== false
+        const telemetryWasOff = !isTelemetryEnabled(vm.seed_policy || {})
         const merged = { ...(vm.seed_policy || {}), ...(body.seed_policy || {}) }
-        for (const k of [
-          'telemetry_disabled',
-          'disable_nonessential_traffic',
-          'do_not_track',
-          'reject_client_settings',
-          'reject_client_metadata_identity',
-        ]) {
+        for (const k of ['telemetry_disabled', 'reject_client_settings', 'reject_client_metadata_identity']) {
           if (body[k] !== undefined) merged[k] = !!body[k]
         }
         if (body.theme !== undefined) merged.theme = body.theme

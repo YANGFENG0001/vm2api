@@ -161,6 +161,25 @@ export function sortedProxiesByAvailability(
   })
 }
 
+/**
+ * 单槽代理 tab 的出口下拉。
+ * 已绑到本槽的留在列表里：正在用本地代理时，SOCKS5 下拉也要看得到它。
+ * 绑满且不属于本槽的不列。本地代理仍固定第一。
+ */
+export function proxiesForVmBind(
+  list: VmProxySnap[],
+  vmId: string,
+  poolBindLimit = 5
+): VmProxySnap[] {
+  const open = list.filter((p) => {
+    if (!p.id || !p.enabled || p.status === 'dead' || p.blocked_reason) {
+      return false
+    }
+    return proxyRemaining(p, vmId, poolBindLimit) > 0
+  })
+  return sortedProxiesByAvailability(open, vmId, poolBindLimit)
+}
+
 function cmp(
   a: string | number,
   b: string | number,

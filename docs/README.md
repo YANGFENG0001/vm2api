@@ -10,6 +10,6 @@
 
 总览：[README](../README.md)。版本：[CHANGELOG.md](../CHANGELOG.md)
 
-入门站：[vm2api.fkcodex.com/zh](https://vm2api.fkcodex.com/zh/)（对照 1.3.132）。
+入门站：[vm2api.fkcodex.com/zh](https://vm2api.fkcodex.com/zh/)（对照 1.3.133）。
 
 Telegram：[t.me/VM2API](https://t.me/VM2API)

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  proxiesForVmBind,
   proxyLabel,
   proxyMatchesQuery,
   sortedProxies,
@@ -62,6 +63,43 @@ describe('local proxy', () => {
         expect(sortedProxies(list, key, dir)[0].id).toBe('px-local')
       }
     }
+  })
+})
+
+describe('proxiesForVmBind', () => {
+  const local = {
+    id: 'px-local',
+    host: 'local',
+    port: 0,
+    scheme: 'local' as const,
+    kind: 'local' as const,
+    enabled: true,
+    status: 'ok' as const,
+    bind_limit: 8,
+    bound_vm_ids: ['vm-14', 'vm-16'],
+  }
+  const socks = {
+    ...base,
+    enabled: true,
+    status: 'ok' as const,
+    bind_limit: 8,
+    bound_vm_ids: [] as string[],
+  }
+
+  it('keeps the local proxy when this slot already uses it', () => {
+    const list = proxiesForVmBind([socks, local], 'vm-14', 5)
+    expect(list.map((p) => p.id)).toEqual(['px-local', 'px-1'])
+  })
+
+  it('drops a full proxy that belongs to other slots', () => {
+    const full = {
+      ...socks,
+      id: 'px-full',
+      bind_limit: 1,
+      bound_vm_ids: ['vm-01'],
+    }
+    const list = proxiesForVmBind([full, local], 'vm-03', 5)
+    expect(list.map((p) => p.id)).toEqual(['px-local'])
   })
 })
 

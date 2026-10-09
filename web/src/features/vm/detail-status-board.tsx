@@ -43,6 +43,7 @@ import { OpenaiPlanBadge } from '@/features/vm/openai-plan-badge'
 import { OpenaiQuotaPanel } from '@/features/vm/openai-quota-panel'
 import { proxyHealthOf } from '@/features/vm/proxy-health'
 import { VmSchedulingBlock } from '@/features/vm/vm-scheduling'
+import { telemetryView } from './telemetry-policy'
 import { telemetryStatusLabel } from './telemetry-status'
 
 type Props = {
@@ -174,7 +175,7 @@ export function VmStatusBoard(props: Props) {
   const reset7 = acc.reset_7d ?? vm.reset_7d
   const cost5 = money(acc.window_5h_cost ?? vm.window_5h_cost ?? cost.w)
   const cost7 = money(acc.window_7d_cost ?? vm.window_7d_cost)
-  const telemetry = kernel?.telemetry
+  const telemetry = telemetryView(vm.seed_policy, kernel?.telemetry)
   const topology = kernel?.process_topology
   const rust = wrapHealthLabel(kernel?.rust_health)
 

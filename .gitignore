@@ -63,6 +63,8 @@ patches/
 /plan/
 
 # local-only; not part of the published tree
+/pnpm-lock.yaml
+/pnpm-workspace.yaml
 /web/pnpm-workspace.yaml
 /src/lib/oauth/auth.js
 /docs/auto-mode
