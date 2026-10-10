@@ -88,8 +88,8 @@ import {
 import { normalizeCredentialMode } from './lib/oauth/credential-mode.mjs'
 import { ensureWorkerCredential } from './lib/transport/go-worker-client.mjs'
 import { stopAllRustKernels } from './lib/transport/rust-kernel-supervisor.mjs'
-import { createRespond } from './lib/http/respond.mjs'
-import { tryServeWebDist } from './lib/http/web-dist.mjs'
+import { createRespond, parseRequestUrl } from './lib/http/respond.mjs'
+import { isConsoleEntry, tryServeWebDist } from './lib/http/web-dist.mjs'
 import { createRoutingRuntime } from './lib/admin/routing-runtime.mjs'
 import { createImportCommit } from './lib/oauth/import-commit.mjs'
 import { createHandleProtocol } from './lib/protocol/handle-protocol.mjs'
@@ -917,7 +917,10 @@ const server = http.createServer(async (req, res) => {
       return res.end()
     }
 
-    const url = new URL(req.url || '/', `http://${req.headers.host}`)
+    const url = parseRequestUrl(req)
+    if (!url) {
+      return json(res, 400, { error: { message: 'Invalid URL', type: 'invalid_request' } })
+    }
     const p = url.pathname
 
     if (isTelemetryPath(p)) {
@@ -946,7 +949,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'GET' && tryServeWebDist(res, cfg.paths.project, p)) return
-    if (req.method === 'GET' && (p === '/console' || p === '/console/')) {
+    if (req.method === 'GET' && isConsoleEntry(p)) {
       return json(res, 404, { error: { message: 'console not found; run pnpm -C web build' } })
     }
 
