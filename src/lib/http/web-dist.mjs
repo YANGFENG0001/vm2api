@@ -31,6 +31,25 @@ function safeFile(root, rel) {
   return resolved
 }
 
+// 安装脚本和文档的入口是 /cc#/login（hash 路由，服务端只看到 /cc）。
+// /console 是旧入口，继续认。这两条都落到 index.html，且不能进长期缓存。
+const CONSOLE_ENTRIES = new Set(['/cc', '/cc/', '/console', '/console/'])
+
+export function isConsoleEntry(pathname) {
+  return CONSOLE_ENTRIES.has(String(pathname || ''))
+}
+
+function relativePath(pathname) {
+  const raw = String(pathname || '')
+  if (CONSOLE_ENTRIES.has(raw)) return 'index.html'
+  // 非法 % 序列不应冒泡成 500；当找不到文件处理。
+  try {
+    return decodeURIComponent(raw.replace(/^\/+/, ''))
+  } catch {
+    return ''
+  }
+}
+
 // Vite 把内容哈希写进 assets/ 下的文件名，内容变了 URL 就变，可以永久缓存；
 // index.html 必须每次重新取，才能拿到新的哈希文件名。
 function cacheControl(rel, ext) {
@@ -47,8 +66,7 @@ export function tryServeWebDist(res, projectRoot, pathname) {
     return false
   }
 
-  const raw = String(pathname || '')
-  const rel = raw === '/console' || raw === '/console/' ? 'index.html' : decodeURIComponent(raw.replace(/^\/+/, ''))
+  const rel = relativePath(pathname)
   if (!rel || rel.includes('\0') || rel.split(/[\\/]/).includes('..')) return false
 
   const file = safeFile(root, rel)

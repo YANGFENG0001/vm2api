@@ -54,6 +54,8 @@ test('caches hashed assets forever but never the index or unhashed files', () =>
     return res.headers['cache-control']
   }
   assert.equal(serve('/console'), 'no-store')
+  assert.equal(serve('/cc'), 'no-store')
+  assert.equal(serve('/cc/'), 'no-store')
   assert.equal(serve('/index.html'), 'no-store')
   assert.match(serve('/assets/index-Ab12.js'), /immutable/)
   assert.doesNotMatch(serve('/model-icons/openai.svg'), /immutable/)
@@ -67,4 +69,20 @@ test('rejects missing dist, traversal, and /health', () => {
   fs.writeFileSync(path.join(root, 'web', 'dist', 'index.html'), 'x')
   assert.equal(tryServeWebDist(mockRes(), root, '/health'), false)
   assert.equal(tryServeWebDist(mockRes(), root, '/../package.json'), false)
+})
+
+test('serves the documented /cc entry as the console index', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vm2api-web-cc-'))
+  fs.mkdirSync(path.join(root, 'web', 'dist'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'web', 'dist', 'index.html'), '<!doctype html><title>cc</title>')
+  for (const entry of ['/cc', '/cc/', '/console', '/console/']) {
+    const res = mockRes()
+    assert.equal(tryServeWebDist(res, root, entry), true, entry)
+    assert.equal(res.status, 200)
+    assert.match(String(res.headers['content-type']), /text\/html/)
+    assert.equal(res.headers['cache-control'], 'no-store')
+    assert.match(String(res.body), /cc/)
+  }
+  assert.equal(tryServeWebDist(mockRes(), root, '/cc%'), false)
+  assert.equal(tryServeWebDist(mockRes(), root, '/cc%ZZ'), false)
 })

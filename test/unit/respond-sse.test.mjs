@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import { Readable } from 'node:stream'
-import { applySseSocketTuning, createRespond, readBody } from '../../src/lib/http/respond.mjs'
+import { applySseSocketTuning, createRespond, parseRequestUrl, readBody } from '../../src/lib/http/respond.mjs'
 import { createHandleProtocol } from '../../src/lib/protocol/handle-protocol.mjs'
 
 test('applySseSocketTuning flushes headers and enables TCP_NODELAY', () => {
@@ -21,6 +21,14 @@ test('applySseSocketTuning flushes headers and enables TCP_NODELAY', () => {
   applySseSocketTuning(res, { tcpNodelay: true })
   assert.equal(flushed, true)
   assert.equal(nodelay, true)
+})
+
+test('parseRequestUrl keeps the path when Host is an unbracketed IPv6 or non-ASCII name', () => {
+  assert.equal(parseRequestUrl({ url: '/cc', headers: { host: '::1' } }).pathname, '/cc')
+  assert.equal(parseRequestUrl({ url: '/cc#/login', headers: { host: '用户.local' } }).pathname, '/cc')
+  assert.equal(parseRequestUrl({ url: '/health', headers: { host: '127.0.0.1:8787' } }).pathname, '/health')
+  assert.equal(parseRequestUrl({ url: 'http://[', headers: { host: '127.0.0.1' } }), null)
+  assert.equal(parseRequestUrl({ url: '/cc', headers: {} }).pathname, '/cc')
 })
 
 test('writeSSEHeaders uses optional tcpNodelay getter', () => {
