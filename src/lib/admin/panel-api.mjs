@@ -64,6 +64,8 @@ import {
   usageErrorText,
 } from '../oauth/crs-usage-probe.mjs'
 import { proxyHasVm } from '../vm/proxy-pool.mjs'
+import { isLocalEgressProxy } from '../vm/egress.mjs'
+import { canRevealClusterNodes, localProxyNodeFields, nodeNameOf } from '../vm/local-proxy-nodes.mjs'
 import { collectLivePanelCredentials } from './panel-live-credentials.mjs'
 import { officialCcHome, readOfficialCcStatus, normalizeOfficialCcConfig } from '../oauth/official-cc-bootstrap.mjs'
 import { normalizeHealthProbeConfig } from './health-probe.mjs'
@@ -94,20 +96,34 @@ export function ok(data, meta) {
 }
 
 /** Start/create `allocated_proxy` must never carry SOCKS credentials. */
-export function publicAllocatedProxy(proxyPool, bound) {
+export function publicAllocatedProxy(proxyPool, bound, { nodeId = null, role = 'admin', nodes = [] } = {}) {
   if (!bound) return null
   const raw = bound.id && proxyPool?.state?.proxies?.find((p) => p.id === bound.id)
-  if (raw && typeof proxyPool.publicProxy === 'function') return proxyPool.publicProxy(raw)
-  return {
-    id: bound.id || null,
-    host: bound.host || null,
-    port: bound.port ?? null,
-    has_auth: !!(bound.username || bound.password || bound.has_auth),
-    status: bound.status ?? null,
-    enabled: bound.enabled ?? null,
-    scheme: bound.scheme || (bound.kind === 'local' ? 'local' : 'socks5'),
-    kind: bound.kind || bound.scheme || 'socks5',
+  let view =
+    raw && typeof proxyPool.publicProxy === 'function'
+      ? proxyPool.publicProxy(raw)
+      : {
+          id: bound.id || null,
+          host: bound.host || null,
+          port: bound.port ?? null,
+          has_auth: !!(bound.username || bound.password || bound.has_auth),
+          status: bound.status ?? null,
+          enabled: bound.enabled ?? null,
+          scheme: bound.scheme || (bound.kind === 'local' ? 'local' : 'socks5'),
+          kind: bound.kind || bound.scheme || 'socks5',
+        }
+  if (!isLocalEgressProxy(view) && !isLocalEgressProxy(bound)) return view
+  const reveal = canRevealClusterNodes(role)
+  const fields = localProxyNodeFields({ node_id: nodeId }, { role, nodes })
+  view = { ...view, ...fields }
+  if (!reveal) {
+    delete view.node_name
+    delete view.bound_nodes
+    delete view.bound_vm_ids
+    delete view.bound_vm_id
+    delete view.node_id
   }
+  return view
 }
 
 /** Drop host paths, container ids, IPs, and PIDs from slot boot/halt payloads. */
@@ -442,6 +458,7 @@ export async function buildDashboard({
   requestLog = null,
   poolScheduler = null,
   proxyPool = null,
+  clusterNodes = [],
 }) {
   try {
     accountQuota?.runtimeRepo?.clearExpired?.(Date.now())
@@ -458,6 +475,8 @@ export async function buildDashboard({
       poolSnap,
       liveById,
       projectRoot: cfg.paths.project,
+      clusterNodes,
+      role: 'admin',
     }),
   )
   const snap = accountQuota.snapshot()
@@ -567,6 +586,7 @@ export async function buildVmList({
   ownerUserId = null,
   role = 'admin',
   requestLog = null,
+  clusterNodes = [],
 } = {}) {
   try {
     accountQuota?.runtimeRepo?.clearExpired?.(Date.now())
@@ -583,6 +603,8 @@ export async function buildVmList({
       poolSnap,
       liveById,
       projectRoot: cfg.paths.project,
+      clusterNodes,
+      role,
     }),
   )
   const accounts = (() => {
@@ -624,6 +646,8 @@ export async function buildVmDetail({
   proxyPool = null,
   kernelHealth = null,
   slotProcessStatus = readSlotProcessStatus,
+  clusterNodes = [],
+  role = 'admin',
 }) {
   const vm = getVm(cfg.paths.project, id)
   if (!vm) {
@@ -647,6 +671,8 @@ export async function buildVmDetail({
     poolSnap,
     liveById,
     projectRoot: cfg.paths.project,
+    clusterNodes,
+    role,
   })
   const acc = findAccount(accountQuota, summary)
   const billing = (() => {
@@ -1496,31 +1522,35 @@ function canImportCredential(v, hit) {
   return !!(base.url || (base.host && base.port) || v.proxy_id)
 }
 
-function mergeVmProxy(v, poolSnap) {
+function mergeVmProxy(v, poolSnap, { role = 'admin', nodes = [] } = {}) {
   const hit = poolProxyForVm(v, poolSnap)
   const base = v.proxy || {}
   const configured = proxyConfigured(v, hit)
   if (!configured) {
     return { proxy: null, proxy_configured: false, can_import_credential: false }
   }
+  const proxy = {
+    id: hit?.id || base.id || v.proxy_id || null,
+    host: normalizeSocksHost(hit?.host || base.host) || hit?.host || base.host || null,
+    port: hit?.port ?? base.port ?? null,
+    label: hit?.label || null,
+    scheme: hit?.scheme || base.scheme || (hit?.id === 'px-local' || base.id === 'px-local' ? 'local' : 'socks5'),
+    has_auth: hit?.has_auth ?? !!(base.url && /\/\/[^/@]+@/.test(base.url)),
+    status: hit?.status ?? null,
+    enabled: hit?.enabled ?? null,
+    blocked_reason: hit ? hit.blocked_reason || null : proxyBlockedReason(base),
+    address_family: hit?.address_family || socksProxyFamily(base) || null,
+    latency_ms: hit?.latency_ms ?? null,
+    last_error: hit?.last_error || null,
+    last_probe_at: hit?.last_probe_at || null,
+    geo: hit?.geo || null,
+    configured: true,
+  }
+  if (isLocalEgressProxy(proxy) || isLocalEgressProxy(hit) || isLocalEgressProxy(base)) {
+    Object.assign(proxy, localProxyNodeFields(v, { role, nodes }))
+  }
   return {
-    proxy: {
-      id: hit?.id || base.id || v.proxy_id || null,
-      host: normalizeSocksHost(hit?.host || base.host) || hit?.host || base.host || null,
-      port: hit?.port ?? base.port ?? null,
-      label: hit?.label || null,
-      scheme: hit?.scheme || base.scheme || (hit?.id === 'px-local' || base.id === 'px-local' ? 'local' : 'socks5'),
-      has_auth: hit?.has_auth ?? !!(base.url && /\/\/[^/@]+@/.test(base.url)),
-      status: hit?.status ?? null,
-      enabled: hit?.enabled ?? null,
-      blocked_reason: hit ? hit.blocked_reason || null : proxyBlockedReason(base),
-      address_family: hit?.address_family || socksProxyFamily(base) || null,
-      latency_ms: hit?.latency_ms ?? null,
-      last_error: hit?.last_error || null,
-      last_probe_at: hit?.last_probe_at || null,
-      geo: hit?.geo || null,
-      configured: true,
-    },
+    proxy,
     proxy_configured: true,
     can_import_credential: canImportCredential(v, hit),
   }
@@ -1560,7 +1590,10 @@ function enrichVm(v, accountQuota, active, extras = {}) {
   const mergedQuota = isCodex ? v.codex_usage?.quota || {} : q
   const u5 = mergedQuota.utilization_5h
   const u7 = mergedQuota.utilization_7d
-  const merged = mergeVmProxy(v, extras.poolSnap || null)
+  const merged = mergeVmProxy(v, extras.poolSnap || null, {
+    role: extras.role || 'admin',
+    nodes: extras.clusterNodes || [],
+  })
   const expiresAt = normalizePanelExpiresAt(v.expires_at, workerCred?.expires_at)
   const hasToken = isCodex ? !!(v.has_token || v.has_refresh) : !!(v.has_token || workerCred?.has_access)
   const tierKey = isCodex
@@ -1686,6 +1719,9 @@ function enrichVm(v, accountQuota, active, extras = {}) {
     note: v.note || null,
     region: v.region || null,
     node_id: v.node_id || null,
+    ...(canRevealClusterNodes(extras.role || 'admin') && v.node_id
+      ? { node_name: nodeNameOf(extras.clusterNodes, v.node_id) }
+      : {}),
     timezone: v.timezone || null,
     timezone_source: v.timezone_source || 'auto',
     locale: v.locale || null,

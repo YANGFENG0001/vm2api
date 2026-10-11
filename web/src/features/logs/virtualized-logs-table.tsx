@@ -326,7 +326,11 @@ function LogRow({
           className='h-auto p-0 font-normal hover:bg-transparent'
           onClick={() => onOpenDetail(row)}
         >
-          <StatusBadge statusCode={row.statusCode} />
+          <StatusBadge
+            statusCode={row.statusCode}
+            finalState={row.finalState}
+            errorCode={row.errorCode}
+          />
         </Button>
       </div>
     </>

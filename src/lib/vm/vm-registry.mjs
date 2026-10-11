@@ -32,6 +32,7 @@ import { summarizeCodexSlot } from './codex-slot.mjs'
 import { evaluateCodexQuotaSchedule } from '../pool/codex-slot-pool.mjs'
 import { effectiveOpenAIPolicy, normalizeOpenAIQuotaPolicy } from '../pool/openai-quota-policy.mjs'
 import { runtimeKind } from './runtime-kind.mjs'
+import { hasBoundExit } from './egress.mjs'
 
 export { isCodexVm, normalizeVmKind } from './vm-kind.mjs'
 
@@ -462,9 +463,70 @@ export function bindVmProxy(projectRoot, id, proxyInfo) {
         password: proxyInfo.password == null ? null : proxyInfo.password,
       }
     : null
-  if (proxyInfo) vm.proxy_cli_enabled = true
+  // Eligibility (`slotHasBoundProxy`) and CLI egress both require this flag.
+  // It is not an operator toggle — it follows whether an exit is bound.
+  vm.proxy_cli_enabled = hasBoundExit(vm.proxy)
+  vm.updated_at = new Date().toISOString()
   atomicWriteJson(file, vm)
   return summarizeVm(vm)
+}
+
+/**
+ * Copy the bound-exit pair onto an in-memory snapshot. Callers that keep a VM
+ * object across `bindVmProxy` (or any other writer) must pull both fields —
+ * `proxy` without `proxy_cli_enabled` is how a bound slot became ineligible.
+ */
+export function adoptVmProxyBinding(target, source) {
+  if (!target) return target
+  target.proxy = source ? (source.proxy ?? null) : null
+  target.proxy_cli_enabled = hasBoundExit(target.proxy)
+  return target
+}
+
+/**
+ * Re-read vm.json, apply a patch of owned fields, write. Use this after another
+ * writer (bind, timezone, start) so a stale snapshot cannot clobber their fields.
+ */
+export function patchVmRecord(projectRoot, id, patch) {
+  const file = path.join(projectRoot, 'vms', `${id}.json`)
+  if (!fs.existsSync(file)) return null
+  const vm = JSON.parse(fs.readFileSync(file, 'utf8'))
+  if (typeof patch === 'function') {
+    const next = patch(vm)
+    if (next && typeof next === 'object' && next !== vm) Object.assign(vm, next)
+  } else if (patch && typeof patch === 'object') {
+    Object.assign(vm, patch)
+  }
+  vm.updated_at = new Date().toISOString()
+  atomicWriteJson(file, vm, { mode: 0o600 })
+  return vm
+}
+
+/**
+ * Heal slots whose bound exit and `proxy_cli_enabled` drifted (the #332 stale
+ * write). False was never an operator switch — panel/API have no such toggle.
+ */
+export function repairVmProxyCliEnabled(projectRoot) {
+  const repaired = []
+  const dir = path.join(projectRoot, 'vms')
+  if (!fs.existsSync(dir)) return repaired
+  for (const name of listVmRecordFiles(dir)) {
+    const file = path.join(dir, name)
+    let vm
+    try {
+      vm = JSON.parse(fs.readFileSync(file, 'utf8'))
+    } catch {
+      continue
+    }
+    if (!vm?.id) continue
+    const enabled = hasBoundExit(vm.proxy)
+    if (vm.proxy_cli_enabled === enabled) continue
+    vm.proxy_cli_enabled = enabled
+    vm.updated_at = new Date().toISOString()
+    atomicWriteJson(file, vm, { mode: 0o600 })
+    repaired.push(vm.id)
+  }
+  return repaired
 }
 
 /**

@@ -46,6 +46,7 @@ export const ErrorCode = {
   GATEWAY_RATE_LIMIT: 'gateway_rate_limit',
   QUOTA_5H_SAFETY: 'quota_5h_safety',
   QUOTA_7D_SAFETY: 'quota_7d_safety',
+  QUOTA_GUARD_REQUEST_TOO_LARGE: 'quota_guard_request_too_large',
   CONCURRENCY_LIMIT: 'concurrency_limit',
   API_KEY_DISABLED: 'api_key_disabled',
   API_KEY_EXPIRED: 'api_key_expired',
@@ -393,6 +394,17 @@ export function mapUpstreamError(status, body, headers = {}) {
       code: ErrorCode.FABLE_REQUIRES_MAX,
       message: String(msg || 'Fable requires an available Max account'),
       status: 429,
+    })
+  }
+  if (inboundCode === ErrorCode.QUOTA_GUARD_REQUEST_TOO_LARGE) {
+    return makeError({
+      type: ErrorType.RATE_LIMIT,
+      code: ErrorCode.QUOTA_GUARD_REQUEST_TOO_LARGE,
+      message: String(
+        msg || '临近额度闸线，本请求预估未命中缓存过大，未发往上游。请缩短上下文、等待窗口重置，或稍后再试。',
+      ),
+      status: 429,
+      details: body?.error?.details,
     })
   }
 

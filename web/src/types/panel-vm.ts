@@ -28,6 +28,13 @@ export type ProxyGeo = {
   error?: string | null
 }
 
+export type LocalBoundNode = {
+  node_id: string | null
+  /** Admin-only display name. Tenants never receive this field. */
+  node_name?: string | null
+  bound_vm_ids: string[]
+}
+
 export type VmProxySnap = {
   id?: string
   host?: string
@@ -57,6 +64,15 @@ export type VmProxySnap = {
   geo?: ProxyGeo | null
   /** 公网 IPv6 出口地理位置；从未检测过为 null。 */
   geo_v6?: ProxyGeo | null
+  /** 槽位所在节点；仅本地代理的槽位视图会带。共享池行没有这一项。 */
+  node_id?: string | null
+  /**
+   * 节点显示名。Admin 本地代理槽位视图：控制面为 null，节点为标签。
+   * 字段出现即允许展示节点名；租户响应省略该字段。
+   */
+  node_name?: string | null
+  /** Admin 本地代理池行：按节点分组的绑定。租户省略。 */
+  bound_nodes?: LocalBoundNode[]
 }
 
 export type InferenceEngine = 'auto' | 'go' | 'rust'
@@ -151,6 +167,8 @@ export type Vm = {
   owner_user_id?: string | null
   /** 所在集群节点；null / 缺省 = 本机。远端槽位不支持官方初装、wrap-cli、换内核等。 */
   node_id?: string | null
+  /** Admin-only cluster node label for `node_id`. Tenants never receive this. */
+  node_name?: string | null
   origin?: string | null
   email?: string
   status?: string

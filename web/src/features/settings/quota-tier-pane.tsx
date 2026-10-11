@@ -315,6 +315,54 @@ function ClaudeGates({
           />
         </div>
       </div>
+      <div className='space-y-3 rounded-lg border p-3'>
+        <div className='flex items-center justify-between gap-4'>
+          <div>
+            <Label>临界区大额冷请求保护</Label>
+            <p className='text-xs text-muted-foreground'>
+              用量进入闸线下最后几个百分点时，评估本请求规模。缓存命中与最终输出无法精确预知，这是尽力保护，不保证绝对不超过闸线，也不会截短上下文或下调
+              max_tokens。
+            </p>
+          </div>
+          <Switch
+            checked={quota.guard_large_cold !== false}
+            onCheckedChange={(guard_large_cold) =>
+              onQuotaChange({ guard_large_cold })
+            }
+          />
+        </div>
+        <SliderSetting
+          id='claude-critical-band'
+          label='临界带宽'
+          desc='闸线下这一段会按单笔冷缓存风险判断，而不是只看出途并发。'
+          value={Math.round(numberOf(quota.critical_band, 0.05) * 100)}
+          min={1}
+          max={15}
+          step={1}
+          format={(value) => `${value}%`}
+          fallback={5}
+          presets={[3, 5, 10]}
+          onChange={(value) => onQuotaChange({ critical_band: value / 100 })}
+        />
+        <StepperSetting
+          id='claude-large-cold-tokens'
+          label='大额冷缓存阈值'
+          desc='预估未命中缓存 token（含 max_tokens）达到此值视为大额。默认 10 万：高于普通一轮，低于现场 50 万缓存写入样本。'
+          value={Math.round(
+            numberOf(quota.large_cold_uncached_tokens, 100000) / 1000
+          )}
+          min={20}
+          max={500}
+          step={10}
+          unit='k'
+          fallback={100}
+          onChange={(value) =>
+            onQuotaChange({
+              large_cold_uncached_tokens: Math.round(value) * 1000,
+            })
+          }
+        />
+      </div>
       <div className='rounded-lg border'>
         <button
           type='button'
@@ -730,6 +778,20 @@ export function QuotaTierPane({
         onQuotaChange({
           block_on_5h: draftQuota.block_on_5h !== false,
           block_on_7d: draftQuota.block_on_7d !== false,
+          guard_large_cold: draftQuota.guard_large_cold !== false,
+          critical_band: Math.min(
+            0.15,
+            Math.max(0.01, numberOf(draftQuota.critical_band, 0.05))
+          ),
+          large_cold_uncached_tokens: Math.min(
+            500000,
+            Math.max(
+              20000,
+              Math.round(
+                numberOf(draftQuota.large_cold_uncached_tokens, 100000)
+              )
+            )
+          ),
           weekly_split: {
             ...weekly,
             enabled: weekly.enabled === true,

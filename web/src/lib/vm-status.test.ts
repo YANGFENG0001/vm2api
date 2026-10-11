@@ -9,7 +9,10 @@ import {
   fleetCounts,
   fleetGroup,
   isRestrictedSchedule,
+  localProxyOptsFromProxy,
+  localProxyText,
   poolStatus,
+  proxyHostLabel,
   proxyNamedLabel,
   restrictionCopy,
   scheduleStateLabel,
@@ -525,5 +528,58 @@ describe('proxyNamedLabel', () => {
       '127.0.0.1:20881'
     )
     expect(proxyNamedLabel(undefined)).toBe('—')
+  })
+})
+
+describe('localProxyText', () => {
+  it('hides node names from tenants', () => {
+    expect(localProxyText()).toBe('local代理')
+    expect(localProxyText({ revealNode: false, nodeName: '东京-01' })).toBe(
+      'local代理'
+    )
+    expect(
+      proxyHostLabel({ id: 'px-local', kind: 'local', host: 'local' })
+    ).toBe('local代理')
+  })
+
+  it('labels the control plane and extension nodes for admin', () => {
+    expect(localProxyText({ revealNode: true })).toBe('当前VPS local代理')
+    expect(localProxyText({ revealNode: true, nodeName: null })).toBe(
+      '当前VPS local代理'
+    )
+    expect(localProxyText({ revealNode: true, nodeName: '东京-01' })).toBe(
+      '东京-01local代理'
+    )
+  })
+
+  it('uses node_name on the proxy when the API revealed it', () => {
+    expect(
+      localProxyOptsFromProxy({
+        id: 'px-local',
+        kind: 'local',
+        node_name: '东京-01',
+        node_id: 'node-a',
+      })
+    ).toEqual({
+      nodeName: '东京-01',
+      nodeId: 'node-a',
+      revealNode: true,
+    })
+    expect(
+      proxyHostLabel({
+        id: 'px-local',
+        kind: 'local',
+        host: 'local',
+        node_name: null,
+      })
+    ).toBe('当前VPS local代理')
+    expect(
+      proxyHostLabel({
+        id: 'px-local',
+        kind: 'local',
+        host: 'local',
+        node_name: '东京-01',
+      })
+    ).toBe('东京-01local代理')
   })
 })

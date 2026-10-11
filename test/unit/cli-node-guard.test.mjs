@@ -4,7 +4,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { GUARD_SCRIPT } from '../../src/lib/vm/cli-node-guard.mjs'
+import { GUARD_SCRIPT, createCliNodeGuard, isCliNodeGuardTarget } from '../../src/lib/vm/cli-node-guard.mjs'
 
 // Real processes stand in for slot CLIs; a fake proc root carries their
 // cmdline/environ so the guard's own shell policy decides who gets SIGKILL.
@@ -102,4 +102,21 @@ test('leaves a CLI alone when its environ cannot be read', async (t) => {
   slot.run([])
   await settle()
   assert.equal(alive(unknown), true)
+})
+
+test('skips stopped / dead slots instead of exec-ing into a missing container', async () => {
+  assert.equal(isCliNodeGuardTarget({ id: 'vm-01', status: 'stopped' }), false)
+  assert.equal(isCliNodeGuardTarget({ id: 'vm-01', status: 'dead' }), false)
+  assert.equal(isCliNodeGuardTarget({ id: 'vm-01', status: 'running' }), true)
+  assert.equal(isCliNodeGuardTarget({ id: 'vm-01', status: 'paused' }), true)
+  const warned = []
+  const execed = []
+  const guard = createCliNodeGuard({
+    listTargets: () => [{ id: 'vm-01', status: 'stopped' }],
+    exec: async (...args) => execed.push(args),
+    logger: { warn: (m) => warned.push(m) },
+  })
+  await guard.tick()
+  assert.deepEqual(execed, [])
+  assert.deepEqual(warned, [])
 })

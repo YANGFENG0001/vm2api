@@ -8,11 +8,22 @@ export const REASONING_EFFORTS = new Set(['none', 'minimal', 'auto', 'low', 'med
 /**
  * Requested thinking effort across inbound dialects: Anthropic
  * `output_config.effort`, OpenAI chat `reasoning_effort`, Responses
- * `reasoning.effort`. Unknown values are dropped so the column stays a closed set.
+ * `reasoning.effort`. Message-level `output_config.effort` (pi mid-conversation
+ * control) wins over the top-level field so the log matches the current turn.
+ * Unknown values are dropped so the column stays a closed set.
  */
 export function reasoningEffortOf(inbound) {
   if (!inbound || typeof inbound !== 'object') return null
-  const raw = inbound.output_config?.effort ?? inbound.reasoning_effort ?? inbound.reasoning?.effort
+  let raw = inbound.output_config?.effort ?? inbound.reasoning_effort ?? inbound.reasoning?.effort
+  if (Array.isArray(inbound.messages)) {
+    for (let i = inbound.messages.length - 1; i >= 0; i--) {
+      const effort = inbound.messages[i]?.output_config?.effort
+      if (effort != null && effort !== '') {
+        raw = effort
+        break
+      }
+    }
+  }
   if (typeof raw !== 'string') return null
   const effort = raw.trim().toLowerCase()
   return REASONING_EFFORTS.has(effort) ? effort : null

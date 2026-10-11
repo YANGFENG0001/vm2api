@@ -37,8 +37,16 @@ import {
 } from '../oauth/crs-usage-probe.mjs'
 import { normalizeUsage } from '../admin/pricing.mjs'
 import { isTestProbeSource } from './schedule-eligibility.mjs'
+import {
+  criticalBandOf,
+  estimateRequestRisk,
+  guardLargeColdEnabled,
+  largeColdThresholdOf,
+  resolveRequestRisk,
+} from './quota-request-risk.mjs'
 
 export { extraHeadersFromLimitError }
+export { estimateRequestRisk }
 
 export class AccountQuota {
   constructor({ dataDir, db, config, accounts }) {
@@ -54,6 +62,10 @@ export class AccountQuota {
     this.tiers = normalizeTiers(config?.tiers, this.config, this.concurrency)
     this.inflight = new Map() // accountId → count
     this.rpmBuckets = new Map() // accountId → number[] timestamps ms
+    // Settled-in-band hops whose Extra reading has not yet moved.
+    this.staleSettled = new Map()
+    this.observedUtil = new Map()
+    this.reservationBand = new Map() // accountId → boolean[] (in-band at acquire)
     this.sessions = config?.sessions instanceof SessionLimitRegistry ? config.sessions : new SessionLimitRegistry()
     // vm_id → normalized `vm.policy.quota`; vm.json is the source of truth, this is the hot-path copy.
     this.vmQuota = new Map()
@@ -243,6 +255,15 @@ export class AccountQuota {
 
     const saved = this.repo.save(acc)
     this._writeSessionWindow(saved)
+    if (sampled) {
+      const observed5 = headerWindowOrEmpty(saved.unified, '5h')
+      const observed7 = headerWindowOrEmpty(saved.unified, '7d')
+      this._observeUtil(accountId, {
+        u5: observed5.utilization,
+        u7: observed7.utilization,
+        source: 'headers',
+      })
+    }
     return saved
   }
 
@@ -406,6 +427,15 @@ export class AccountQuota {
     }
     const saved = this.repo.save(acc)
     this._writeSessionWindow(saved)
+    if (usageOk) {
+      const observed5 = headerWindowOrEmpty(saved.unified, '5h')
+      const observed7 = headerWindowOrEmpty(saved.unified, '7d')
+      this._observeUtil(accountId, {
+        u5: observed5.utilization,
+        u7: observed7.utilization,
+        source: 'official',
+      })
+    }
     if (usageOk && this.headerUnderSafety(saved)) {
       this.clearQuotaExhaustedCooldown(accountId)
     }
@@ -507,7 +537,7 @@ export class AccountQuota {
     for (const vm of vms || []) this.setVmQuotaOverride(vm?.id, vm?.quota_override || null)
   }
 
-  canAccept(accountId, { tier = null } = {}) {
+  canAccept(accountId, { tier = null, requestRisk = null, quotaRequest = null } = {}) {
     const acc = this.ensure({ account_id: accountId })
     const policy = this.policyFor(acc, { tier })
     const ratio = Number(policy.limit_5h ?? policy.safety_ratio ?? this.config.safety_ratio ?? 0.85)
@@ -517,6 +547,7 @@ export class AccountQuota {
     const warnRatio = Number(policy.warn_ratio ?? this.config.warn_ratio ?? 0.75)
     const quotaConfig = this.quotaConfigFor(acc)
     const inflight = this.inflight.get(accountId) || 0
+    const band = criticalBandOf(quotaConfig)
 
     const limit = this.limitFor(acc, policy)
     if (inflight >= limit) {
@@ -561,7 +592,7 @@ export class AccountQuota {
     const u5 = asUtilRatio(w5.utilization)
     const u7 = asUtilRatio(w7.utilization)
 
-    if (quotaConfig.block_on_5h && safetyTripped(u5, ratio, inflight)) {
+    if (quotaConfig.block_on_5h && safetyTripped(u5, ratio, inflight, band)) {
       acc.last_blocked = { at: new Date().toISOString(), window: '5h', utilization: u5, status: w5.status }
       this.repo.save(acc)
       return {
@@ -578,7 +609,7 @@ export class AccountQuota {
       }
     }
 
-    if (quotaConfig.block_on_7d && safetyTripped(u7, weeklyRatio, inflight)) {
+    if (quotaConfig.block_on_7d && safetyTripped(u7, weeklyRatio, inflight, band)) {
       acc.last_blocked = { at: new Date().toISOString(), window: '7d', utilization: u7, status: w7.status }
       this.repo.save(acc)
       return {
@@ -589,6 +620,7 @@ export class AccountQuota {
           safety_ratio: weeklyRatio,
           weekly_safety_ratio: weeklyRatio,
           limit_7d: weeklyRatio,
+          inflight,
           reset: w7.reset,
           message: `7d usage ${(u7 * 100).toFixed(1)}% ≥ weekly ${(weeklyRatio * 100).toFixed(0)}%; request blocked to protect weekly quota`,
         },
@@ -606,6 +638,47 @@ export class AccountQuota {
         }
       }
     }
+    const stale = this.staleSettled.get(accountId) || 0
+    const in5 = quotaConfig.block_on_5h && inCriticalBand(u5, ratio, band)
+    const in7 = quotaConfig.block_on_7d && inCriticalBand(u7, weeklyRatio, band)
+    if (guardLargeColdEnabled(quotaConfig) && (in5 || in7)) {
+      const risk = resolveRequestRisk({ requestRisk, quotaRequest }, accountId, quotaConfig)
+      const tooLarge = this._requestTooLargeInBand({
+        quotaConfig,
+        u5,
+        u7,
+        ratio,
+        weeklyRatio,
+        band,
+        risk,
+        stale,
+        in5,
+        in7,
+      })
+      if (tooLarge) {
+        return {
+          ok: false,
+          reason: 'quota_guard_request_too_large',
+          detail: {
+            utilization_5h: u5,
+            utilization_7d: u7,
+            limit_5h: ratio,
+            limit_7d: weeklyRatio,
+            band,
+            stale_settled: stale,
+            inflight,
+            estimated_prompt_tokens: risk?.estimatedPromptTokens ?? null,
+            uncached_tokens: risk?.uncachedTokens ?? null,
+            cold: risk?.cold ?? null,
+            cold_reason: risk?.coldReason ?? null,
+            reset_5h: w5.reset,
+            reset_7d: w7.reset,
+            message:
+              '临近额度闸线，本请求预估未命中缓存过大。Near the quota safety line, this large uncached request is not eligible on this account.',
+          },
+        }
+      }
+    }
 
     return { ok: true, warn_5h: u5 >= warnRatio, warn_7d: u7 >= Math.min(warnRatio, weeklyRatio) }
   }
@@ -620,6 +693,10 @@ export class AccountQuota {
     if (inflight >= limit) {
       return { ok: false, reason: 'concurrency_limit', detail: { inflight, max: limit, source: 'quota-reservation' } }
     }
+    const inBand = this._inCriticalBandNow(accountId, { tier: opts.tier })
+    const stack = this.reservationBand.get(accountId) || []
+    stack.push(inBand)
+    this.reservationBand.set(accountId, stack)
     this.inflight.set(accountId, inflight + 1)
     this._rpmTouch(accountId)
     return { ok: true }
@@ -671,7 +748,72 @@ export class AccountQuota {
   release(accountId) {
     const n = Math.max(0, (this.inflight.get(accountId) || 1) - 1)
     this.inflight.set(accountId, n)
+    const stack = this.reservationBand.get(accountId)
+    if (stack?.length) stack.pop()
+    if (stack && !stack.length) this.reservationBand.delete(accountId)
     return n
+  }
+
+  /**
+   * A hop that actually ran on an in-band account: Extra may still show the
+   * previous percent, so the next large request treats the reading as stale
+   * until headers/official usage move.
+   */
+  noteBandSettled(accountId) {
+    if (!accountId) return 0
+    const stack = this.reservationBand.get(accountId)
+    const reservedInBand = Array.isArray(stack) ? stack.some(Boolean) : false
+    if (!reservedInBand && !this._inCriticalBandNow(accountId)) return this.staleSettled.get(accountId) || 0
+    const next = (this.staleSettled.get(accountId) || 0) + 1
+    this.staleSettled.set(accountId, next)
+    return next
+  }
+
+  _inCriticalBandNow(accountId, { tier = null } = {}) {
+    const acc = this.repo.get(accountId) || this.ensure({ account_id: accountId })
+    const policy = this.policyFor(acc, { tier })
+    const quotaConfig = this.quotaConfigFor(acc)
+    const band = criticalBandOf(quotaConfig)
+    const ratio = Number(policy.limit_5h ?? policy.safety_ratio ?? this.config.safety_ratio ?? 0.85)
+    const weeklyRatio = Number(
+      policy.limit_7d ?? policy.weekly_safety_ratio ?? this.config.weekly_safety_ratio ?? ratio,
+    )
+    const u5 = asUtilRatio(headerWindowOrEmpty(acc.unified, '5h').utilization)
+    const u7 = asUtilRatio(headerWindowOrEmpty(acc.unified, '7d').utilization)
+    return (
+      (quotaConfig.block_on_5h && inCriticalBand(u5, ratio, band)) ||
+      (quotaConfig.block_on_7d && inCriticalBand(u7, weeklyRatio, band))
+    )
+  }
+
+  _requestTooLargeInBand({ quotaConfig, u5, u7, ratio, weeklyRatio, band, risk, stale, in5 = null, in7 = null }) {
+    if (!guardLargeColdEnabled(quotaConfig) || !risk) return false
+    const threshold = largeColdThresholdOf(quotaConfig)
+    const uncached = Number(risk.uncachedTokens) || 0
+    const large = risk.largeCold === true || uncached >= threshold
+    if (!large) return false
+    const coldLarge = risk.largeCold === true || (risk.cold !== false && uncached >= threshold)
+    const staleLarge = stale > 0 && large
+    if (!coldLarge && !staleLarge) return false
+    const band5 = in5 == null ? quotaConfig.block_on_5h && inCriticalBand(u5, ratio, band) : in5
+    const band7 = in7 == null ? quotaConfig.block_on_7d && inCriticalBand(u7, weeklyRatio, band) : in7
+    return band5 || band7
+  }
+
+  _observeUtil(accountId, { u5 = null, u7 = null, source = 'headers' } = {}) {
+    if (!accountId) return
+    const next5 = u5 == null ? null : asUtilRatio(u5)
+    const next7 = u7 == null ? null : asUtilRatio(u7)
+    const prev = this.observedUtil.get(accountId)
+    this.observedUtil.set(accountId, { u5: next5, u7: next7, source })
+    if (!prev) return
+    const progressed =
+      (next5 != null && prev.u5 != null && next5 > prev.u5 + 0.001) ||
+      (next7 != null && prev.u7 != null && next7 > prev.u7 + 0.001)
+    const reset =
+      (next5 != null && prev.u5 != null && next5 + 0.02 < prev.u5) ||
+      (next7 != null && prev.u7 != null && next7 + 0.02 < prev.u7)
+    if (source === 'official' || progressed || reset) this.staleSettled.set(accountId, 0)
   }
 
   /**
@@ -1101,15 +1243,27 @@ function asUtilRatio(value) {
 
 /**
  * The 5h/7d header is the previous response, so calls already in flight are
- * not in it. At the configured line, stop. Inside the last 5 points, don't
+ * not in it. At the configured line, stop. Inside the last `band` points, don't
  * admit a second call or the account lands on upstream 100%.
  */
-function safetyTripped(util, ratio, inflight) {
+function safetyTripped(util, ratio, inflight, band = 0.05) {
   const u = asUtilRatio(util)
   const limit = asUtilRatio(ratio)
   if (!(limit > 0) || !(u > 0)) return false
   if (u >= limit) return true
-  return Number(inflight) > 0 && u >= limit - 0.05
+  const width = Number(band)
+  const edge = Number.isFinite(width) && width >= 0 ? width : 0.05
+  return Number(inflight) > 0 && u >= limit - edge
+}
+
+/** util is already 0–1. Half-open [limit-band, limit). At the line, safetyTripped wins. */
+function inCriticalBand(util, limit, band = 0.05) {
+  const u = asUtilRatio(util)
+  const line = asUtilRatio(limit)
+  const width = Number(band)
+  const edge = Number.isFinite(width) && width >= 0 ? width : 0.05
+  if (!(line > 0) || !(u > 0) || !(edge > 0)) return false
+  return u >= line - edge && u < line
 }
 
 function isUnifiedRejected(h = {}) {

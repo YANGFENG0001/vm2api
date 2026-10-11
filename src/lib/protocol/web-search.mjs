@@ -242,7 +242,13 @@ export function toAnthropicCustomTool(tool) {
   const strict = fn?.strict ?? tool.strict
   if (typeof strict === 'boolean') out.strict = strict
   if (tool.defer_loading === true) out.defer_loading = true
-  if (typeof tool.eager_input_streaming === 'boolean') out.eager_input_streaming = tool.eager_input_streaming
+  const eager =
+    typeof tool.eager_input_streaming === 'boolean'
+      ? tool.eager_input_streaming
+      : typeof fn?.eager_input_streaming === 'boolean'
+        ? fn.eager_input_streaming
+        : undefined
+  if (typeof eager === 'boolean') out.eager_input_streaming = eager
   return out
 }
 

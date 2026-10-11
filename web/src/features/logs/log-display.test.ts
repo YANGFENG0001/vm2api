@@ -10,6 +10,7 @@ import {
   resolveModelAuditDisplay,
   segmentWidth,
   statusBadgeClass,
+  statusBadgeTooltip,
   thinkingEffortBadgeClass,
   unitPricePerMillion,
 } from './log-display'
@@ -132,6 +133,17 @@ describe('display helpers', () => {
     expect(statusBadgeClass(429)).toContain('bg-yellow-100')
     expect(statusBadgeClass(503)).toContain('bg-red-100')
     expect(statusBadgeClass(null)).toContain('bg-gray-100')
+  })
+
+  it('does not treat committed incomplete 200 as a green success', () => {
+    expect(statusBadgeClass(200, 'incomplete')).toContain('bg-orange-100')
+    expect(statusBadgeClass(200, 'verified')).toContain('bg-green-100')
+    expect(statusBadgeClass(500, 'incomplete')).toContain('bg-red-100')
+    expect(statusBadgeTooltip(200, 'incomplete', 'worker_timeout')).toBe(
+      '响应未完整结束（worker_timeout）'
+    )
+    expect(statusBadgeTooltip(200, 'incomplete', null)).toBe('响应未完整结束')
+    expect(statusBadgeTooltip(200, 'verified', 'worker_timeout')).toBeNull()
   })
 
   it('styles known and unknown effort levels', () => {

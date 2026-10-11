@@ -19,6 +19,7 @@ import {
   proxyBindLimit,
   proxyBoundIds,
   proxyIsInvalid,
+  proxyIsLocal,
   proxyOptionLabel,
   proxyStatusLabel,
   proxyLabel,
@@ -26,7 +27,7 @@ import {
   sortedProxiesByAvailability,
 } from '@/features/proxies/proxy-sort'
 import { proxiesQueryOptions } from '@/features/proxies/queries'
-import { useVpsIp } from '@/features/proxies/use-vps-ip'
+import { useLocalProxyLabelOpts } from '@/features/proxies/use-vps-ip'
 
 type ImportResp = {
   added?: number
@@ -82,7 +83,7 @@ export function ImportProxyStep({
   nodeId,
 }: {
   vmId: string
-  /** 槽位所在节点；本地代理按它标 `local:<IP>`。 */
+  /** 槽位所在节点；本地代理按节点名标「节点名local代理」。 */
   nodeId?: string | null
 }) {
   const px = useQuery(proxiesQueryOptions())
@@ -103,7 +104,7 @@ export function ImportProxyStep({
   // 的入库序，直接铺出来会把失效和绑满的混在中间，选起来要靠眼睛筛。
   const options = sortedProxiesByAvailability(proxies, vmId, poolLimit)
   const bound = proxies.find((p) => proxyBoundIds(p).includes(vmId)) || null
-  const vpsIp = useVpsIp(nodeId, proxies)
+  const labelOpts = useLocalProxyLabelOpts(nodeId)
 
   const refresh = () =>
     Promise.all([
@@ -213,7 +214,7 @@ export function ImportProxyStep({
                   value={p.id || ''}
                   disabled={!here && (full || bad)}
                 >
-                  {proxyOptionLabel(p, poolLimit, vpsIp)}
+                  {proxyOptionLabel(p, poolLimit, labelOpts)}
                   {full ? ' · 已绑满' : ''}
                 </SelectItem>
               )
@@ -224,8 +225,10 @@ export function ImportProxyStep({
           <StatusMark
             tone={{
               key: 'proxy',
-              text: `${proxyLabel(bound, vpsIp)} · ${proxyStatusLabel(bound)}${
-                bound.latency_ms != null ? ` ${bound.latency_ms}ms` : ''
+              text: `${proxyLabel(bound, labelOpts)} · ${proxyStatusLabel(bound)}${
+                bound.latency_ms != null && !proxyIsLocal(bound)
+                  ? ` ${bound.latency_ms}ms`
+                  : ''
               }`,
               cls: bound.blocked_reason
                 ? 'off'

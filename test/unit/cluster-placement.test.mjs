@@ -378,7 +378,8 @@ test('tar stream round-trips through system tar with modes intact', async (t) =>
 })
 
 test('socket relay resolves the remote path lazily and reaches a unix socket over streamlocal', async (t) => {
-  const hostKey = utils.generateKeyPairSync('ed25519')
+  // ssh2 1.17 emits a malformed ed25519 OpenSSH key ~0.4% of the time; ECDSA keys parse every time.
+  const hostKey = utils.generateKeyPairSync('ecdsa', { bits: 256 })
   const asked = []
   const server = new Server({ hostKeys: [hostKey.private] }, (conn) => {
     conn.on('authentication', (ctx) => ctx.accept())

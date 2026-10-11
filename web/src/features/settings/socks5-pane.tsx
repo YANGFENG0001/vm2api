@@ -99,18 +99,18 @@ export function Socks5Pane() {
         </CardHeader>
         <CardContent className='space-y-2 text-sm text-muted-foreground'>
           <p>
-            本地代理 = 当前VPS的本地代理，选项里显示为{' '}
-            <code>local:&lt;VPS IP&gt;</code>
-            。槽位走所在 VPS 的默认路由出网，不经远程 SOCKS5，也不启
-            kin-egress： 本机槽从控制面出网，集群节点槽从该节点自身出网。
+            本地代理 =
+            每台机器自己的公网出口：控制面槽走控制面，集群节点槽走该节点，不是某一台固定
+            VPS。管理台把控制面槽标成「当前VPS
+            local代理」，节点槽标成「节点名local代理」（例如
+            东京-01local代理）。租户只看到「local代理」，不显示节点名。
           </p>
           <p>
             节点槽的换票、刷新、测试与时区地理也经该节点 SSH
             链路从节点出网；节点未连接时这些请求直接失败，不回落控制面。
           </p>
           <p>
-            池里只有一条本地代理，可同时绑给不同 VPS
-            上的槽位，选项列表固定排第一。探测只看本机 Docker 网是否在。
+            池里只有一条本地代理记录（px-local），绑定额度所有节点共用。选项列表固定排第一。探测地理和延迟只看控制面本机，不要把它当成节点出口。
           </p>
         </CardContent>
       </Card>

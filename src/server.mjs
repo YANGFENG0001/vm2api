@@ -151,6 +151,9 @@ const vmSync = initVmDbSync(cfg.paths.project)
 if (vmSync.upserted || vmSync.rebuilt) {
   console.log(`[db] vm mirror reconciled: upserted=${vmSync.upserted} rebuilt=${vmSync.rebuilt}`)
 }
+if (vmSync.proxy_cli_repaired) {
+  console.log(`[vm] repaired proxy_cli_enabled on ${vmSync.proxy_cli_repaired} slot(s)`)
+}
 
 // --- P3 sticky + quota ---
 
@@ -449,6 +452,7 @@ credentialRefreshMonitor = createCredentialRefreshMonitor({
 kernelWatchdog = createKernelWatchdog({
   config: routingConfig.kernel_watchdog,
   listTargets: () => listVms(cfg.paths.project),
+  getRouting: () => routingConfig,
   homeDirFor: (vm) => path.join(cfg.paths.project, 'vms', vm.id, 'cli-home'),
   ensureTelemetry: (vm) => ensureTelemetrySidecar({ projectRoot: cfg.paths.project, vm }),
   onFault: (vm, reason) => {
@@ -902,6 +906,7 @@ const handlePanel = createPanelHandler({
   refreshWorkerCredentialForVm,
   fetchWorkerModels,
   clusterRoutes,
+  clusterManager,
   slotShell,
 })
 

@@ -170,6 +170,7 @@ test('create returns the persisted VM when runtime start fails', async () => {
     const saved = JSON.parse(fs.readFileSync(path.join(root, 'vms', `${vm.id}.json`), 'utf8'))
     assert.equal(saved.status, 'error')
     assert.ok(saved.schedule_disabled_reason)
+    assert.equal(saved.proxy_cli_enabled, true)
     assert.equal(saved.timezone, 'Europe/Berlin')
     assert.equal(saved.timezone_source, 'proxy_geo')
   } finally {
@@ -211,7 +212,9 @@ test('create binds an explicitly chosen exit instead of auto-allocating', async 
     assert.equal(response.status, 200, response.body?.error?.message || JSON.stringify(response.body))
     const id = response.body?.data?.vm?.id
     assert.equal(pool.getProxyForVm(id)?.id, local)
-    assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'vms', `${id}.json`), 'utf8')).proxy.id, local)
+    const saved = JSON.parse(fs.readFileSync(path.join(root, 'vms', `${id}.json`), 'utf8'))
+    assert.equal(saved.proxy.id, local)
+    assert.equal(saved.proxy_cli_enabled, true)
     assert.deepEqual(
       pool.snapshot().proxies.find((p) => p.id === socks).bound_vm_ids,
       [],

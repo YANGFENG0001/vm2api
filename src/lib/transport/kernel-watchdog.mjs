@@ -20,7 +20,7 @@ import {
   dataplaneUsesCcNode,
   WRAP_SLOT_MAX,
 } from './rust-kernel-supervisor.mjs'
-import { normalizeInferenceEngine } from '../vm/slot-engine.mjs'
+import { resolveInferenceEngine } from '../vm/slot-engine.mjs'
 
 export const DEFAULT_KERNEL_WATCHDOG = Object.freeze({
   enabled: true,
@@ -55,12 +55,12 @@ export function normalizeKernelWatchdogConfig(raw = {}) {
 
 const HARD_DOWN = new Set(['stopped', 'dead', 'error', 'disabled'])
 
-export function isKernelWatchdogTarget(vm) {
+export function isKernelWatchdogTarget(vm, routing = {}) {
   if (!vm?.id) return false
   if (HARD_DOWN.has(String(vm.status || '').toLowerCase())) return false
-  const configured = normalizeInferenceEngine(vm.inference_engine, { inherit: true })
-  if (configured === 'rust') return true
-  return String(vm.runtime?.engine || '').toLowerCase() === 'rust'
+  // Effective engine, not the slot's own fields: panel-created slots omit
+  // inference_engine and inherit routing.inference.engine (usually rust).
+  return resolveInferenceEngine(vm, routing) === 'rust'
 }
 
 function isTelemetryHealTarget(vm) {
@@ -78,6 +78,7 @@ function kernelSlotMismatch(exec) {
 export function createKernelWatchdog({
   config: initial = {},
   listTargets,
+  getRouting = null,
   homeDirFor,
   ensure = ensureRustKernel,
   health = rustKernelHealth,
@@ -141,13 +142,15 @@ export function createKernelWatchdog({
     inTick = true
     try {
       const vms = typeof listTargets === 'function' ? listTargets() || [] : []
+      // Panel can change routing.inference.engine without restarting this process.
+      const routing = typeof getRouting === 'function' ? getRouting() || {} : {}
       for (const vm of vms) {
-        // Every running slot, not only kernel-restart targets: live slots carry no
-        // inference_engine / runtime.engine, so the target filter would skip them all.
-        // Off the tick's critical path: a slow docker exec must not delay kernel restarts.
-        // The due time is set before the check runs, so a slot never has two checks in flight.
+        // Telemetry sidecar heal is independent of kernel-restart targeting: a
+        // missing sidecar costs telemetry, not inference. Off the tick's critical
+        // path so a slow docker exec cannot delay container restarts. The due time
+        // is set before the check runs, so a slot never has two checks in flight.
         if (isTelemetryHealTarget(vm)) void healTelemetry(vm, now())
-        if (!isKernelWatchdogTarget(vm)) continue
+        if (!isKernelWatchdogTarget(vm, routing)) continue
         const exec = {
           vmId: vm.id,
           vm,

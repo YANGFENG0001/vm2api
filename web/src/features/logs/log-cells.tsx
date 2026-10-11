@@ -12,23 +12,38 @@ import {
   copyText,
   resolveModelAuditDisplay,
   statusBadgeClass,
+  statusBadgeTooltip,
   thinkingEffortBadgeClass,
 } from './log-display'
 
 export function StatusBadge({
   statusCode,
+  finalState = null,
+  errorCode = null,
   className,
 }: {
   statusCode: number | null
+  finalState?: string | null
+  errorCode?: string | null
   className?: string
 }) {
-  return (
+  const badge = (
     <Badge
       variant='outline'
-      className={cn(statusBadgeClass(statusCode), className)}
+      className={cn(statusBadgeClass(statusCode, finalState), className)}
     >
       {statusCode ?? '未知'}
     </Badge>
+  )
+  const title = statusBadgeTooltip(statusCode, finalState, errorCode)
+  if (!title) return badge
+  return (
+    <Tooltip delayDuration={250}>
+      <TooltipTrigger asChild>
+        <span className='inline-flex'>{badge}</span>
+      </TooltipTrigger>
+      <TooltipContent className='max-w-xs text-xs'>{title}</TooltipContent>
+    </Tooltip>
   )
 }
 

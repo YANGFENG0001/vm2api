@@ -26,11 +26,14 @@ import { ProxyBindPicker } from './proxy-bind-picker'
 import { type ProxyHover, useProxyHovered } from './proxy-hover'
 import { SeatCells, SeatCount } from './proxy-seats'
 import {
+  LOCAL_PROXY_HINT,
+  LOCAL_PROXY_SHARED_QUOTA,
+  localBoundGroupLabel,
+  localBoundGroups,
   proxyBindLimit,
   proxyBindable,
   proxyBoundIds,
   proxyHealthKey,
-  LOCAL_PROXY_HINT,
   proxyHostText,
   proxyIsInvalid,
   proxyIsLocal,
@@ -98,6 +101,9 @@ export function ProxyRow({
   const local = proxyIsLocal(proxy)
   const bindable = proxyBindable(proxy)
   const free = Math.max(0, limit - ids.length)
+  const groups = local ? localBoundGroups(proxy, vmById) : []
+  const showGroups =
+    local && (proxy.bound_nodes != null || groups.some((g) => g.node_id))
   const accepts =
     !!dragVm &&
     bindable &&
@@ -168,7 +174,7 @@ export function ProxyRow({
             )}
             title={
               local
-                ? `${proxyHostText(proxy)} · ${LOCAL_PROXY_HINT}：槽位走所在 VPS（本机或集群节点）自身出口`
+                ? `${LOCAL_PROXY_HINT}：每台机器自己的公网出口，绑定额度${LOCAL_PROXY_SHARED_QUOTA}`
                 : proxyHostText(proxy)
             }
           >
@@ -176,7 +182,7 @@ export function ProxyRow({
           </span>
           {local ? (
             <span className='shrink-0 text-xs text-muted-foreground'>
-              {LOCAL_PROXY_HINT}
+              {LOCAL_PROXY_SHARED_QUOTA}
             </span>
           ) : null}
           {proxy.address_family === 6 ? (
@@ -191,7 +197,7 @@ export function ProxyRow({
         </div>
         <div className='flex min-w-0 items-center gap-2'>
           <StatusMark tone={proxyStatusTone(proxy)} />
-          <GeoLine proxy={proxy} />
+          <GeoLine proxy={proxy} local={local} />
         </div>
         {proxy.last_error && !proxy.blocked_reason ? (
           <p
@@ -214,7 +220,9 @@ export function ProxyRow({
       <div className='w-[84px] shrink-0 space-y-1'>
         <Latency proxy={proxy} />
         <p className='text-[11px] text-muted-foreground'>
-          {fmtAgo(proxy.last_probe_at) || '未探测'}
+          {local
+            ? `${fmtAgo(proxy.last_probe_at) || '未探测'} · 控制面`
+            : fmtAgo(proxy.last_probe_at) || '未探测'}
         </p>
       </div>
 
@@ -225,7 +233,11 @@ export function ProxyRow({
           aria-valuemin={0}
           aria-valuemax={limit}
           aria-valuenow={ids.length}
-          aria-valuetext={`已绑 ${ids.length} / ${limit}`}
+          aria-valuetext={
+            local
+              ? `已绑 ${ids.length} / ${limit}（${LOCAL_PROXY_SHARED_QUOTA}）`
+              : `已绑 ${ids.length} / ${limit}`
+          }
           className='flex items-center gap-3'
         >
           <SeatCount
@@ -239,39 +251,68 @@ export function ProxyRow({
             color={PROXY_HEALTH_SOLID[health]}
             className='max-w-[180px] min-w-0 flex-1'
           />
+          {local ? (
+            <span className='shrink-0 text-[10px] text-muted-foreground'>
+              {LOCAL_PROXY_SHARED_QUOTA}
+            </span>
+          ) : null}
         </div>
-        <div className='flex flex-wrap items-center gap-1'>
-          {ids.map((vmId) => (
-            <VmChip
-              key={vmId}
-              vm={vmById.get(vmId)}
-              vmId={vmId}
-              tone={dead ? 'bad' : 'ok'}
-              disabled={pending.binding}
-              onUnbind={() => actions.onUnbind(id, vmId)}
-              onDragChange={actions.onVmDragChange}
-            />
-          ))}
-          {over ? (
-            <span className='inline-flex h-6 items-center rounded-md border border-dashed border-primary px-2 text-xs text-primary'>
-              松开绑定到这里
-            </span>
-          ) : !bindable ? (
-            <span className='text-xs text-muted-foreground'>
-              {health === 'off' ? '已禁用，不接新槽位' : '已失效，不接新槽位'}
-            </span>
-          ) : free > 0 ? (
-            <ProxyBindPicker
-              vms={vms}
-              boundHere={ids}
-              ownerOf={ownerOf}
-              free={free}
-              disabled={pending.binding}
-              onBind={(vmId) => actions.onBind(id, vmId)}
-            />
-          ) : ids.length ? null : (
-            <span className='text-xs text-muted-foreground'>无空位</span>
-          )}
+        <div className='space-y-1.5'>
+          {showGroups
+            ? groups.map((group) => (
+                <div key={group.node_id || 'control'} className='space-y-1'>
+                  <p className='text-[11px] text-muted-foreground'>
+                    {localBoundGroupLabel(group)}
+                    {group.node_id ? ' · 出口为该节点本机' : ''}
+                  </p>
+                  <div className='flex flex-wrap items-center gap-1'>
+                    {group.bound_vm_ids.map((vmId) => (
+                      <VmChip
+                        key={vmId}
+                        vm={vmById.get(vmId)}
+                        vmId={vmId}
+                        tone={dead ? 'bad' : 'ok'}
+                        disabled={pending.binding}
+                        onUnbind={() => actions.onUnbind(id, vmId)}
+                        onDragChange={actions.onVmDragChange}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ))
+            : ids.map((vmId) => (
+                <VmChip
+                  key={vmId}
+                  vm={vmById.get(vmId)}
+                  vmId={vmId}
+                  tone={dead ? 'bad' : 'ok'}
+                  disabled={pending.binding}
+                  onUnbind={() => actions.onUnbind(id, vmId)}
+                  onDragChange={actions.onVmDragChange}
+                />
+              ))}
+          <div className='flex flex-wrap items-center gap-1'>
+            {over ? (
+              <span className='inline-flex h-6 items-center rounded-md border border-dashed border-primary px-2 text-xs text-primary'>
+                松开绑定到这里
+              </span>
+            ) : !bindable ? (
+              <span className='text-xs text-muted-foreground'>
+                {health === 'off' ? '已禁用，不接新槽位' : '已失效，不接新槽位'}
+              </span>
+            ) : free > 0 ? (
+              <ProxyBindPicker
+                vms={vms}
+                boundHere={ids}
+                ownerOf={ownerOf}
+                free={free}
+                disabled={pending.binding}
+                onBind={(vmId) => actions.onBind(id, vmId)}
+              />
+            ) : ids.length ? null : (
+              <span className='text-xs text-muted-foreground'>无空位</span>
+            )}
+          </div>
         </div>
       </div>
 
@@ -344,12 +385,20 @@ export function ProxyRow({
   )
 }
 
-function GeoLine({ proxy }: { proxy: VmProxySnap }) {
+function GeoLine({
+  proxy,
+  local = false,
+}: {
+  proxy: VmProxySnap
+  local?: boolean
+}) {
   const geo = proxy.geo
+  const note = local ? '控制面探测' : null
   if (!geo?.timezone && !geo?.country) {
     return (
       <p className='truncate text-[11px] text-muted-foreground'>
         {geo?.error ? '地理检测失败' : '地理未检测'}
+        {note ? ` · ${note}` : ''}
       </p>
     )
   }
@@ -359,11 +408,12 @@ function GeoLine({ proxy }: { proxy: VmProxySnap }) {
   return (
     <p
       className='min-w-0 truncate text-[11px] text-muted-foreground'
-      title={[geo.ip, geo.isp].filter(Boolean).join(' · ') || undefined}
+      title={[geo.ip, geo.isp, note].filter(Boolean).join(' · ') || undefined}
     >
       {place ? <span className='text-foreground/80'>{place}</span> : null}
       {place && geo.timezone ? ' · ' : null}
       {geo.timezone}
+      {note ? ` · ${note}` : ''}
     </p>
   )
 }

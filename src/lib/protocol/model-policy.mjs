@@ -24,6 +24,7 @@ import {
   HAIKU_BETA_HEADER,
   joinBetas,
 } from './claude-code-betas.mjs'
+import { reasoningEffortOf } from './log-fields.mjs'
 
 function isCatalogModelId(id) {
   const s = String(id || '')
@@ -841,7 +842,7 @@ export function isHaiku55Model(model = '') {
 function applyHaiku55Thinking(body) {
   if (!body.thinking || typeof body.thinking !== 'object') return body
   const type = String(body.thinking.type || '').toLowerCase()
-  const effort = String(body.output_config?.effort || '').toLowerCase()
+  const effort = String(reasoningEffortOf(body) || '').toLowerCase()
   const disabledBlocked = type === 'disabled' && (effort === 'xhigh' || effort === 'max')
   if (type === 'enabled' || body.thinking.budget_tokens != null || disabledBlocked) {
     body.thinking = adaptiveOnlyThinking(body.thinking)

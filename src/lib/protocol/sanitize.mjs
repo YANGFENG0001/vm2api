@@ -224,9 +224,15 @@ export function sanitizeAnthropicBody(body, { strictPassthrough = false } = {}) 
  *   - leading system / developer turns (before the first user) lift into top-level system
  *   - mid-conversation role:system after a user turn is kept when the model/beta allow it
  *   - unknown roles (admin, tool, function, …) become user
- *   - empty content is dropped
- *   - consecutive same-role turns are merged (Anthropic requires alternation)
+ *   - empty content is dropped unless the turn carries per-turn controls
+ *     (`output_config` / `clear_at`). Those must keep position; merging them
+ *     into a neighbor would lose the current-turn effort / clear_at.
+ *   - consecutive same-role turns are merged (Anthropic requires alternation),
+ *     except control turns
  *   - the first remaining turn must be user
+ *   - when mid-conversation system is not kept, the last lifted message-level
+ *     effort becomes top-level `output_config.effort` so the current turn still
+ *     has an effort. History markers cannot survive as `role=system`.
  */
 export function normalizeAnthropicMessages(body, { keepMidConversationSystem = true } = {}) {
   if (!body || !Array.isArray(body.messages)) return body
@@ -234,6 +240,8 @@ export function normalizeAnthropicMessages(body, { keepMidConversationSystem = t
   const systemParts = []
   const mapped = []
   let seenUser = false
+  let lastLiftedEffort = null
+  let keptTurnControl = false
   for (const message of body.messages) {
     if (!message || typeof message !== 'object') continue
     const role = String(message.role || '')
@@ -243,19 +251,20 @@ export function normalizeAnthropicMessages(body, { keepMidConversationSystem = t
       if (!seenUser || !keepMidConversationSystem) {
         const text = contentToPlainText(message.content)
         if (text) systemParts.push(text)
+        const effort = messageOutputConfigEffort(message)
+        if (effort) lastLiftedEffort = effort
         continue
       }
-      if (anthropicContentIsEmpty(message.content)) continue
-      mapped.push({ ...message, role: 'system' })
+      if (anthropicContentIsEmpty(message.content) && !messageHasTurnControls(message)) continue
+      if (messageHasTurnControls(message)) keptTurnControl = true
+      mapped.push(keptAnthropicMessage(message, 'system'))
       continue
     }
-    if (anthropicContentIsEmpty(message.content)) continue
+    if (anthropicContentIsEmpty(message.content) && !messageHasTurnControls(message)) continue
     const nextRole = role === 'assistant' ? 'assistant' : 'user'
     if (nextRole === 'user') seenUser = true
-    mapped.push({
-      ...message,
-      role: nextRole,
-    })
+    if (messageHasTurnControls(message)) keptTurnControl = true
+    mapped.push(keptAnthropicMessage(message, nextRole))
   }
 
   const merged = mergeConsecutiveAnthropicMessages(mapped)
@@ -265,10 +274,16 @@ export function normalizeAnthropicMessages(body, { keepMidConversationSystem = t
 
   body.messages = merged
   if (systemParts.length) body.system = appendSystemParts(body.system, systemParts)
+  if (lastLiftedEffort && !keptTurnControl) applyLiftedEffort(body, lastLiftedEffort)
   return body
 }
 
-/** Haiku / hops without mid-conversation-system: lift leftover role=system into top-level system. */
+/**
+ * Haiku / hops without mid-conversation-system: lift leftover role=system into top-level system.
+ * Empty control turns cannot stay as role=system; the last message-level
+ * `output_config.effort` is copied to the top-level field so the current turn
+ * still has an effort. History effort markers are dropped with the turns.
+ */
 export function liftMidConversationSystemMessages(body) {
   if (!body || !Array.isArray(body.messages)) return body
   return normalizeAnthropicMessages({ ...body, messages: body.messages.slice() }, { keepMidConversationSystem: false })
@@ -292,7 +307,33 @@ function contentToPlainText(content) {
   return String(content?.text || '').trim()
 }
 
-function anthropicContentIsEmpty(content) {
+function keptAnthropicMessage(message, role) {
+  const next = { ...message, role }
+  if (anthropicContentIsEmpty(next.content)) next.content = []
+  return next
+}
+
+function messageOutputConfigEffort(message) {
+  const effort = message?.output_config?.effort
+  return typeof effort === 'string' && effort.trim() ? effort : null
+}
+
+function applyLiftedEffort(body, effort) {
+  if (body.output_config && typeof body.output_config === 'object') {
+    body.output_config = { ...body.output_config, effort }
+    return
+  }
+  body.output_config = { effort }
+}
+
+/** `output_config` / `clear_at` are per-turn controls, not content. */
+export function messageHasTurnControls(message) {
+  if (!message || typeof message !== 'object') return false
+  if (message.clear_at != null) return true
+  return message.output_config != null && typeof message.output_config === 'object'
+}
+
+export function anthropicContentIsEmpty(content) {
   if (content == null) return true
   if (typeof content === 'string') return !content.trim()
   if (!Array.isArray(content)) return false
@@ -305,11 +346,11 @@ function anthropicContentIsEmpty(content) {
   })
 }
 
-function mergeConsecutiveAnthropicMessages(messages) {
+export function mergeConsecutiveAnthropicMessages(messages) {
   const out = []
   for (const message of messages) {
     const last = out[out.length - 1]
-    if (!last || last.role !== message.role) {
+    if (!last || last.role !== message.role || messageHasTurnControls(last) || messageHasTurnControls(message)) {
       out.push({ ...message })
       continue
     }

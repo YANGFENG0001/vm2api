@@ -12,9 +12,12 @@ import {
   isSlotProxyDesynced,
   reloadSlotWorker,
   slotKernelAlive,
+  slotContainerNetworkMismatch,
+  slotWorkerNeedsRecreate,
   writeWorkerFiles,
   startVmRuntime,
 } from '../../src/lib/vm/vm-runtime.mjs'
+import { slotNetworkForVm } from '../../src/lib/vm/egress.mjs'
 
 const running = { running: true, networkMode: 'host', image: 'kin-os/ubuntu:24.04' }
 const stopped = { running: false, networkMode: 'host', image: 'kin-os/ubuntu:24.04' }
@@ -80,6 +83,109 @@ test('stopped slot is replaced when runtime kind changes', () => {
 
 test('missing container is not replaced', () => {
   assert.equal(shouldReplaceSlotContainer({ existing: null, recreate: true }), false)
+})
+
+test('slotContainerNetworkMismatch compares docker network to bound proxy', () => {
+  const vm = { id: 'vm-01', proxy: { id: 'px-new' } }
+  const want = slotNetworkForVm(vm)
+  assert.equal(want, 'kin-eg-px-new')
+  assert.equal(slotContainerNetworkMismatch({ running: true, networkMode: 'kin-eg-px-old' }, vm), true)
+  assert.equal(slotContainerNetworkMismatch({ running: true, networkMode: want }, vm), false)
+  assert.equal(slotContainerNetworkMismatch({ running: true, networkMode: 'host' }, vm), true)
+  assert.equal(slotContainerNetworkMismatch({ running: true, networkMode: null }, vm), true)
+  assert.equal(slotContainerNetworkMismatch(null, vm), true)
+  assert.equal(slotContainerNetworkMismatch({ running: true, networkMode: 'kin-eg-px-old' }, { id: 'vm-01' }), false)
+})
+
+test('reload recreates a docker slot when egress network mismatches', (t) => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kin-reload-net-'))
+  t.after(() => fs.rmSync(runDir, { recursive: true, force: true }))
+  const vm = { id: 'vm-04', proxy: { id: 'px-b', host: '1.2.3.4', port: 1080, url: 'socks5://u:p@1.2.3.4:1080' } }
+  const paths = {
+    socket: path.join(runDir, 'worker.sock'),
+    kernelSocket: path.join(runDir, 'kernel.sock'),
+  }
+  fs.writeFileSync(paths.kernelSocket, '')
+  const existing = { running: true, networkMode: 'kin-eg-px-a' }
+  assert.equal(isSlotProxyDesynced(vm, runDir), false, 'transparent desync must not drive this path')
+  assert.equal(slotWorkerNeedsRecreate(existing, vm, paths), true)
+  assert.equal(
+    shouldReplaceSlotContainer({
+      existing,
+      recreate: true,
+      network: slotNetworkForVm(vm),
+    }),
+    true,
+  )
+})
+
+test('reload restarts a docker slot when egress network matches', (t) => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kin-reload-net-ok-'))
+  t.after(() => fs.rmSync(runDir, { recursive: true, force: true }))
+  const vm = { id: 'vm-05', proxy: { id: 'px-a', host: '1.2.3.4', port: 1080 } }
+  const paths = { kernelSocket: path.join(runDir, 'kernel.sock') }
+  fs.writeFileSync(paths.kernelSocket, '')
+  const existing = { running: true, networkMode: 'kin-eg-px-a' }
+  assert.equal(slotWorkerNeedsRecreate(existing, vm, paths), false)
+})
+
+test('kvm running without relay sock is not recreated when the network matches', (t) => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kin-reload-kvm-ok-'))
+  t.after(() => fs.rmSync(runDir, { recursive: true, force: true }))
+  const vm = { id: 'vm-06', runtime: { type: 'kvm' }, proxy: { id: 'px-a' } }
+  const paths = { kernelSocket: path.join(runDir, 'kernel.sock') }
+  const existing = { running: true, networkMode: 'kin-eg-px-a', runtime: 'kvm' }
+  assert.equal(slotKernelAlive(existing, paths, vm), true)
+  assert.equal(slotWorkerNeedsRecreate(existing, vm, paths), false)
+})
+
+test('kvm runner on the wrong egress network is recreated', (t) => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kin-reload-kvm-net-'))
+  t.after(() => fs.rmSync(runDir, { recursive: true, force: true }))
+  const vm = { id: 'vm-07', runtime: { type: 'kvm' }, proxy: { id: 'px-b' } }
+  const paths = { kernelSocket: path.join(runDir, 'kernel.sock') }
+  const existing = { running: true, networkMode: 'kin-eg-px-a', runtime: 'kvm' }
+  assert.equal(slotKernelAlive(existing, paths, vm), true, 'missing sock must not itself recreate KVM')
+  assert.equal(slotWorkerNeedsRecreate(existing, vm, paths), true)
+})
+
+test('unbound slot does not recreate for a missing desired network', (t) => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kin-reload-nopx-'))
+  t.after(() => fs.rmSync(runDir, { recursive: true, force: true }))
+  const vm = { id: 'vm-08' }
+  const paths = { kernelSocket: path.join(runDir, 'kernel.sock') }
+  fs.writeFileSync(paths.kernelSocket, '')
+  const existing = { running: true, networkMode: 'kin-eg-px-old' }
+  assert.equal(slotNetworkForVm(vm), '')
+  assert.equal(slotContainerNetworkMismatch(existing, vm), false)
+  assert.equal(slotWorkerNeedsRecreate(existing, vm, paths), false)
+})
+
+test('reloadSlotWorker recreates on network mismatch before the KVM restart path', () => {
+  const src = fs.readFileSync(new URL('../../src/lib/vm/vm-runtime.mjs', import.meta.url), 'utf8')
+  const reload = src.slice(
+    src.indexOf('export function reloadSlotWorker'),
+    src.indexOf('export function slotKernelAlive'),
+  )
+  assert.match(reload, /slotWorkerNeedsRecreate\(existing, vm, paths\)/)
+  assert.ok(
+    reload.indexOf('slotWorkerNeedsRecreate') < reload.indexOf('isKvmRuntime(vm)'),
+    'network recreate must run before systemctl restart',
+  )
+})
+
+test('writeWorkerFiles uses the desired kin-eg network even if the container is gone', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kin-worker-want-net-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const vm = {
+    id: 'vm-10',
+    proxy: { id: 'px-new', host: '1.2.3.4', port: 1080, url: 'socks5://u:p@1.2.3.4:1080' },
+  }
+  writeWorkerFiles(vm, root, { routing: {} })
+  const doc = JSON.parse(fs.readFileSync(path.join(root, 'vms', 'vm-10', 'run', 'worker.json'), 'utf8'))
+  assert.equal(doc.egress_mode, 'transparent')
+  assert.equal(doc.proxy_url, '')
+  assert.equal(doc.proxy_required, false)
 })
 
 test('proxyEndpoint strips userinfo', () => {

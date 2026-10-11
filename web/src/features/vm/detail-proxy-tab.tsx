@@ -1,7 +1,11 @@
 import { Link } from '@tanstack/react-router'
 import type { Vm, VmProxySnap } from '@/types/panel-vm'
 import { cn } from '@/lib/utils'
-import { localProxyText, proxyHostLabel } from '@/lib/vm-status'
+import {
+  localProxyText,
+  localProxyOptsFromProxy,
+  proxyHostLabel,
+} from '@/lib/vm-status'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -15,7 +19,7 @@ import { TabsContent } from '@/components/ui/tabs'
 import { StatusMark } from '@/components/status-mark'
 import { HealthDonut } from '@/features/overview/health-gauge'
 import {
-  LOCAL_PROXY_HINT,
+  LOCAL_PROXY_SHARED_QUOTA,
   proxyIsLocal,
   proxyLabel,
   proxyStatusLabel,
@@ -24,7 +28,7 @@ import {
   proxyFieldClass,
   proxyLatencyTone,
 } from '@/features/proxies/proxy-tone'
-import { useVpsIp } from '@/features/proxies/use-vps-ip'
+import { useLocalProxyLabelOpts } from '@/features/proxies/use-vps-ip'
 import { Field } from '@/features/vm/detail-section-primitives'
 import { proxyHealthOf } from '@/features/vm/proxy-health'
 
@@ -33,7 +37,7 @@ type VmProxyTabProps = {
   proxy: VmProxySnap
   boundId: string
   free: VmProxySnap[]
-  /** 整个池：本机槽的本地代理 IP 取自池里本地代理行的出口地理。 */
+  /** 整个池（父组件仍传入；标签已改走节点名，不再读出口 IP）。 */
   pool: VmProxySnap[]
   bindId: string
   onBindIdChange: (id: string) => void
@@ -50,7 +54,6 @@ export function VmProxyTab(props: VmProxyTabProps) {
     proxy,
     boundId,
     free,
-    pool,
     bindId,
     onBindIdChange,
     onUnbind,
@@ -61,8 +64,10 @@ export function VmProxyTab(props: VmProxyTabProps) {
   } = props
   const health = proxyHealthOf(vm, proxy)
   const local = !!boundId && proxyIsLocal(proxy)
-  const vpsIp = useVpsIp(vm.node_id, pool)
-  // 本地代理行的地理是控制面那台；节点槽从节点出网，那份地理不代表它。
+  const fallbackOpts = useLocalProxyLabelOpts(vm.node_id)
+  const labelOpts = localProxyOptsFromProxy(proxy, fallbackOpts)
+  const localLabel = localProxyText(labelOpts)
+  // 本地代理行的地理/延迟是控制面那台；节点槽从节点出网，那份探测不代表它。
   const nodeLocal = local && !!vm.node_id
   const selectedId = bindId || free[0]?.id || ''
 
@@ -76,7 +81,7 @@ export function VmProxyTab(props: VmProxyTabProps) {
         </CardHeader>
         <p className='px-6 pb-2 text-xs text-muted-foreground'>
           {local
-            ? `${LOCAL_PROXY_HINT}：槽内流量与控制面代发请求（换票、刷新、测试）都从 ${localProxyText(vpsIp)} 出网。`
+            ? `${localLabel}：槽内流量与控制面代发请求（换票、刷新、测试）都从所在机器出网。绑定额度${LOCAL_PROXY_SHARED_QUOTA}。`
             : '出站经这条代理的 egress 网关。槽内不 Dial SOCKS。'}
         </p>
         <CardContent className='flex flex-wrap gap-6 pt-0'>
@@ -92,7 +97,7 @@ export function VmProxyTab(props: VmProxyTabProps) {
             ) : null}
             <Field label='地址'>
               <span className='field-host text-xs'>
-                {proxyHostLabel(proxy, vpsIp)}
+                {proxyHostLabel(proxy, labelOpts)}
               </span>
             </Field>
             <Field label='状态'>
@@ -115,17 +120,23 @@ export function VmProxyTab(props: VmProxyTabProps) {
               <span
                 className={cn(
                   'field-metric text-sm',
-                  proxyFieldClass(proxyLatencyTone(proxy))
+                  nodeLocal
+                    ? 'text-muted-foreground'
+                    : proxyFieldClass(proxyLatencyTone(proxy))
                 )}
               >
-                {proxy.latency_ms != null ? `${proxy.latency_ms}ms` : '—'}
+                {nodeLocal
+                  ? '出口为该节点本机'
+                  : proxy.latency_ms != null
+                    ? `${proxy.latency_ms}ms`
+                    : '—'}
               </span>
             </Field>
             <Field label='认证'>{proxy.has_auth ? '有' : '无'}</Field>
             <Field label='出口'>
               {nodeLocal ? (
                 <span className='text-xs text-muted-foreground'>
-                  随节点出口（时区按节点出口地理同步）
+                  出口为该节点本机（时区按节点出口地理同步）
                 </span>
               ) : proxy.geo?.country || proxy.geo?.timezone ? (
                 <span className='flex flex-wrap items-center gap-1.5'>
@@ -184,7 +195,7 @@ export function VmProxyTab(props: VmProxyTabProps) {
               size='sm'
               variant='outline'
               onClick={onProbe}
-              disabled={!!proxy.blocked_reason}
+              disabled={!!proxy.blocked_reason || nodeLocal}
             >
               测通
             </Button>
@@ -219,7 +230,7 @@ export function VmProxyTab(props: VmProxyTabProps) {
             <SelectContent>
               {free.map((p) => (
                 <SelectItem key={p.id} value={p.id || ''}>
-                  {proxyLabel(p, vpsIp)}
+                  {proxyLabel(p, labelOpts)}
                 </SelectItem>
               ))}
             </SelectContent>

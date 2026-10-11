@@ -333,9 +333,25 @@ export function syncWorkerTelemetry(vm, projectRoot) {
   return { wrote: true, enabled: doc.telemetry.enabled === true }
 }
 
+/** Running container is still attached to a different kin-eg-* than vm.proxy.id. */
+export function slotContainerNetworkMismatch(existing, vm) {
+  const want = slotNetworkForVm(vm)
+  if (!want) return false
+  return (existing?.networkMode || '') !== want
+}
+
+/** Reload must recreate (not restart) when the kernel is dead or egress network moved. */
+export function slotWorkerNeedsRecreate(existing, vm, paths) {
+  if (!existing) return false
+  if (!slotKernelAlive(existing, paths, vm)) return true
+  return slotContainerNetworkMismatch(existing, vm)
+}
+
 /**
  * Rewrite worker.json from the current vm proxy and bounce the process.
- * Never docker rm — killing a live worker mid-refresh can invalidate the grant.
+ * Recreate when the kernel is dead or NetworkMode != slotNetworkForVm(vm);
+ * otherwise never docker rm — killing a live worker mid-refresh can invalidate the grant.
+ * KVM without a relay sock is still live and must not be recreated for that reason.
  * KVM restarts the guest kin-kernel unit; docker restart would reboot the VM.
  */
 export function reloadSlotWorker(vm, projectRoot, { routing } = {}) {
@@ -355,7 +371,8 @@ export function reloadSlotWorker(vm, projectRoot, { routing } = {}) {
   }
   const existing = inspectContainer(name)
   if (!existing) return startVmRuntime(vm, projectRoot, { recreate: false, routing })
-  if (!slotKernelAlive(existing, paths, vm)) {
+  // Before the KVM branch so a runner on the wrong kin-eg-* is recreated too.
+  if (slotWorkerNeedsRecreate(existing, vm, paths)) {
     return startVmRuntime(vm, projectRoot, { recreate: true, routing })
   }
   if (isKvmRuntime(vm)) {
@@ -456,9 +473,10 @@ export function writeWorkerFiles(vm, projectRoot, { transparent, routing } = {})
   } catch {}
   if (!token) token = crypto.randomBytes(32).toString('hex')
   replaceSlotOwnedFile(paths.token, token + '\n', vm)
+  const wantNet = String(slotNetworkForVm(vm) || '')
+  const liveNet = String(inspectContainer(containerName(vm.id))?.networkMode || '')
   const onEgress =
-    transparent === true ||
-    (transparent !== false && String(inspectContainer(containerName(vm.id))?.networkMode || '').startsWith('kin-eg-'))
+    transparent === true || (transparent !== false && (wantNet.startsWith('kin-eg-') || liveNet.startsWith('kin-eg-')))
   const local = isLocalEgressProxy(vm.proxy)
   const proxyUrl = onEgress || local ? '' : workerProxyUrl(vm) || ''
   if (!onEgress && !local && vm.proxy_required !== false && !proxyUrl) throw new Error('slot SOCKS5 proxy is required')
@@ -735,6 +753,7 @@ export function startVmRuntime(vm, projectRoot, { recreate = false, routing, acc
       runtime: runtimeKind(vm),
     })
   ) {
+    // Container only. Host bind mounts (cli-home, run, kvm/, machine-id) stay.
     sh(['docker', 'rm', '-f', name])
     existing = null
   }

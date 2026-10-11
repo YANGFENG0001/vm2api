@@ -492,11 +492,12 @@ export function slotTestIdentity(projectRoot, vm) {
   if (vm.fingerprint?.session_id !== sessionId && sessionId) {
     try {
       const vmPath = path.join(projectRoot, 'vms', `${vm.id}.json`)
+      const disk = JSON.parse(fs.readFileSync(vmPath, 'utf8'))
       atomicWriteJson(
         vmPath,
         {
-          ...vm,
-          fingerprint: { ...(vm.fingerprint || {}), session_id: sessionId },
+          ...disk,
+          fingerprint: { ...(disk.fingerprint || {}), session_id: sessionId },
           updated_at: new Date().toISOString(),
         },
         { mode: 0o600 },

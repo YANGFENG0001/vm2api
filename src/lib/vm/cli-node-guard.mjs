@@ -18,6 +18,15 @@ import { slotHost } from './slot-host.mjs'
 
 export const CLI_NODE_GUARD_INTERVAL_MS = 15_000
 
+// Same set the kernel watchdog skips: no container to exec into, so every tick
+// would only log `No such container` / `is not running`.
+const HARD_DOWN = new Set(['stopped', 'dead', 'error', 'disabled'])
+
+export function isCliNodeGuardTarget(vm) {
+  if (!vm?.id || isCodexVm(vm)) return false
+  return !HARD_DOWN.has(String(vm.status || '').toLowerCase())
+}
+
 // $0 is "guard"; "$@" are live KIN_PANEL_SHELL tokens. KIN_GUARD_PROC is a test seam.
 export const GUARD_SCRIPT = `
 proc=\${KIN_GUARD_PROC:-/proc}
@@ -73,7 +82,7 @@ export function createCliNodeGuard({
     inTick = true
     try {
       const tokens = liveTokens().filter(Boolean)
-      const vms = (listTargets?.() || []).filter((vm) => vm?.id && !isCodexVm(vm))
+      const vms = (listTargets?.() || []).filter(isCliNodeGuardTarget)
       for (const vm of vms) {
         try {
           const connect = slotHost(vm).dockerApi()

@@ -169,3 +169,8 @@ test('settings save imports public routing notify helpers', () => {
     /import\s*\{[^}]*publicNotifyConfig[^}]*publicRoutingNotify[^}]*\}\s*from\s*['"]\.\/notify\.mjs['"]/,
   )
 })
+
+test('PUT proxy restarts kin-egress when connection or domain_forward changes', () => {
+  const routes = fs.readFileSync(path.join(root, 'src/lib/admin/panel-routes.mjs'), 'utf8')
+  assert.match(routes, /result\.domain_forward_changed \|\| result\.connection_changed/)
+})

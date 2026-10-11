@@ -175,6 +175,9 @@ Claude PATCH `max_sessions` 返回 400 `claude_max_sessions_forbidden`；OpenAI 
 
 本地软闸在实际普通准入生效：用量达到闸线即排除账号。提高阈值或窗口有效重置后重新评估，不能清除上游硬限制、人工关闭或凭证问题；已在飞的流和对话窗口不被重建。两个窗口独立判断，一个重置不代表另一个解除。
 
+Claude `routing.quota` 另有临界区保护（默认开）：`guard_large_cold`（bool）、`critical_band`（默认 0.05，闸线下这一段）、`large_cold_uncached_tokens`（默认 100000）。用量进入 5h 或 7d 闸线下 `critical_band` 且本请求被估成大额冷缓存（首轮 / 前缀变化 / 未确认缓存，整段 prompt + `max_tokens`）时，该账号本笔不接单，调度改选其他账号；全池都在临界区则本地 HTTP 429 `quota_guard_request_too_large`，不打上游。已达闸线仍拦截普通请求。闸是尽力保护：缓存命中与最终输出无法精确预知，也不把美元换成官方百分比，更不会截短上下文。
+
+
 `codex.quota` 为 `null`、数组、未知字段、字符串数字或超范围值，返回 400 `invalid_openai_quota`，消息定位字段，校验失败前不落盘。新增限额不接受 OpenAI 并发 0；历史存储 0 仍按原有效值 2 执行和展示。
 
 旧配置缺少自有 `codex.quota` 时，启动迁移先保存 OpenAI 槽的有效非默认值为覆盖，再原子保存规范化 routing；重启/中断续跑保持幂等。既有异常大对话上限保留为历史本槽值，不截断。升级前备份 routing 与 VM 记录；代码回退不自动恢复旧配置语义。不要用仓内默认配置覆盖部署上的 routing/VM/凭证数据。

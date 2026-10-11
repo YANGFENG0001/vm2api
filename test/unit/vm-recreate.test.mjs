@@ -56,6 +56,16 @@ test('recreated record keeps slot identity and drops credentials', () => {
   assert.equal(next.seed_policy.telemetry_disabled, false)
   assert.equal(next.inference_engine, 'rust')
   assert.equal(next.persona_preset, 'zero')
+  assert.equal(next.proxy_cli_enabled, true)
+})
+
+test('recreated record enables proxy_cli when an exit is still bound', () => {
+  const next = buildRecreatedVmRecord({
+    id: 'vm-08',
+    proxy: { id: 'px-8', url: 'socks5h://127.0.0.1:1080', host: '127.0.0.1', port: 1080 },
+    proxy_cli_enabled: false,
+  })
+  assert.equal(next.proxy_cli_enabled, true)
 })
 
 test('recreated records preserve and normalize non-US timezones', () => {

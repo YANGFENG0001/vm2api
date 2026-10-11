@@ -13,12 +13,13 @@ import net from 'node:net'
 import crypto from 'node:crypto'
 import { resolveStoreDb } from '../db/database.mjs'
 import { ProxiesRepo } from '../db/repos/proxies-repo.mjs'
-import { canBindProxyToVm, normalizeOwnerId, proxyOwnerId } from '../admin/resource-owner.mjs'
+import { canBindProxyToVm, normalizeOwnerId, proxyOwnerId, vmOwnerId } from '../admin/resource-owner.mjs'
 import { validTimezone } from '../core/timezone.mjs'
 import { lookupProxyGeo, lookupProxyGeoV6 } from './proxy-geo.mjs'
 import { DNS_PRIMARY_AUTO, DNS_UPSTREAMS, LOCAL_EGRESS_ID, isLocalEgressProxy, validDnsPrimary } from './egress.mjs'
 import { normalizeSocksHost, socksEndpoint, socksProxyUrl, socksProxyFamily } from './socks-address.mjs'
 import { proxyBlockedReason } from './proxy-policy.mjs'
+import { canRevealClusterNodes, annotatePublicLocalProxy } from './local-proxy-nodes.mjs'
 
 export const MAX_VMS_PER_PROXY = 5
 export const BIND_LIMIT_MIN = 1
@@ -386,6 +387,33 @@ export class ProxyPool {
       },
       proxies: proxies.map((p) => this.publicProxy(p)),
     }
+  }
+
+  /**
+   * Panel-facing snapshot. Quota is still the shared px-local row; this only
+   * attaches per-node bound groups for admin and redacts node names / other
+   * tenants' VM ids for `user`.
+   */
+  panelSnapshot({ role = 'admin', ownerUserId = undefined, vms = [], nodes = [] } = {}) {
+    const reveal = canRevealClusterNodes(role)
+    const owner = role === 'user' ? normalizeOwnerId(ownerUserId) : undefined
+    const snap = this.snapshot({ ownerUserId: owner ? ownerUserId : undefined })
+    const vmList = Array.isArray(vms) ? vms : []
+    const nodeList = Array.isArray(nodes) ? nodes : []
+    const ownerVmIds = owner ? new Set(vmList.filter((vm) => vmOwnerId(vm) === owner).map((vm) => String(vm.id))) : null
+    if (owner) {
+      const hasLocal = snap.proxies.some((p) => isLocalEgressProxy(p))
+      if (!hasLocal) {
+        const raw = this.state.proxies.find((p) => isLocalEgressProxy(p))
+        if (raw && boundVmIdsOf(raw).some((id) => ownerVmIds.has(String(id)))) {
+          snap.proxies.unshift(this.publicProxy(raw))
+        }
+      }
+    }
+    snap.proxies = snap.proxies
+      .map((p) => annotatePublicLocalProxy(p, { reveal, vms: vmList, nodes: nodeList, ownerVmIds }))
+      .filter(Boolean)
+    return snap
   }
 
   publicProxy(p) {

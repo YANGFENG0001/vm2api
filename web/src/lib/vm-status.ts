@@ -752,11 +752,54 @@ type ProxyRef = {
   scheme?: string
   kind?: string
   label?: string | null
+  node_id?: string | null
+  node_name?: string | null
 }
 
-/** 本地代理 = 槽位所在 VPS 自身出口，按那台 VPS 标 `local:<IP>`；不知道是哪台写「当前VPS」。 */
-export function localProxyText(vpsIp?: string | null): string {
-  return `local:${vpsIp?.trim() || '当前VPS'}`
+export type LocalProxyLabelOpts = {
+  /** Cluster node display name. Empty + reveal = control plane. */
+  nodeName?: string | null
+  /** Fallback when the node record is gone but we still know the id. */
+  nodeId?: string | null
+  /** Admin/super may see node names; tenants get the generic label. */
+  revealNode?: boolean
+}
+
+function isLocalProxyLabelOpts(value: unknown): value is LocalProxyLabelOpts {
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    ('nodeName' in value || 'nodeId' in value || 'revealNode' in value)
+  )
+}
+
+/**
+ * Shared local-proxy display label.
+ * Tenant: `local代理`. Control plane (admin): `当前VPS local代理`.
+ * Extension node (admin): `${nodeName}local代理`.
+ */
+export function localProxyText(
+  opts?: LocalProxyLabelOpts | string | null
+): string {
+  if (!isLocalProxyLabelOpts(opts) || !opts.revealNode) return 'local代理'
+  const name =
+    String(opts.nodeName || '').trim() || String(opts.nodeId || '').trim()
+  return name ? `${name}local代理` : '当前VPS local代理'
+}
+
+/** Prefer the API's `node_name` field (present only for admin). */
+export function localProxyOptsFromProxy(
+  proxy?: ProxyRef | null,
+  fallback?: LocalProxyLabelOpts
+): LocalProxyLabelOpts {
+  if (proxy && Object.prototype.hasOwnProperty.call(proxy, 'node_name')) {
+    return {
+      nodeName: proxy.node_name ?? null,
+      nodeId: proxy.node_id ?? null,
+      revealNode: true,
+    }
+  }
+  return fallback ?? { revealNode: false }
 }
 
 function isLocalProxyRef(proxy: ProxyRef): boolean {
@@ -768,13 +811,20 @@ function isLocalProxyRef(proxy: ProxyRef): boolean {
   )
 }
 
-/** `vpsIp` 只作用于本地代理：它的出口随槽位所在 VPS 变。 */
+/** Local labels come from placement, not the control-plane probe IP. */
 export function proxyHostLabel(
   proxy: ProxyRef | undefined,
-  vpsIp?: string | null
+  opts?: LocalProxyLabelOpts | string | null
 ): string {
   if (!proxy) return '—'
-  if (isLocalProxyRef(proxy)) return localProxyText(vpsIp)
+  if (isLocalProxyRef(proxy)) {
+    return localProxyText(
+      localProxyOptsFromProxy(
+        proxy,
+        isLocalProxyLabelOpts(opts) ? opts : undefined
+      )
+    )
+  }
   if (proxy.host) {
     const host =
       proxy.host.includes(':') && !proxy.host.startsWith('[')
@@ -788,9 +838,9 @@ export function proxyHostLabel(
 /** 带代理名称的地址：`名称 · host:port`；没起名就退回 proxyHostLabel()。 */
 export function proxyNamedLabel(
   proxy: ProxyRef | undefined,
-  vpsIp?: string | null
+  opts?: LocalProxyLabelOpts | string | null
 ): string {
-  const host = proxyHostLabel(proxy, vpsIp)
+  const host = proxyHostLabel(proxy, opts)
   const name = proxy?.label?.trim()
   return name && host !== '—' ? `${name} · ${host}` : host
 }

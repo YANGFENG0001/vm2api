@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import type { VmProxySnap } from '@/types/panel-vm'
-import { localProxyText } from '@/lib/vm-status'
+import { localProxyText, type LocalProxyLabelOpts } from '@/lib/vm-status'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -11,7 +11,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import {
-  LOCAL_PROXY_HINT,
+  LOCAL_PROXY_SHARED_QUOTA,
   proxyBindable,
   proxyOptionLabel,
   proxyRemaining,
@@ -19,7 +19,7 @@ import {
   sortedProxiesByAvailability,
 } from '@/features/proxies/proxy-sort'
 import { proxiesQueryOptions } from '@/features/proxies/queries'
-import { useVpsIp } from '@/features/proxies/use-vps-ip'
+import { useLocalProxyLabelOpts } from '@/features/proxies/use-vps-ip'
 
 /** 不指定出口：后端按健康度自动分配，提交时不发 `proxy_id`。 */
 const AUTO_EXIT = '__auto__'
@@ -29,14 +29,13 @@ export type CreateExit = {
   setValue: (id: string) => void
   options: VmProxySnap[]
   poolLimit: number
-  vpsIp: string | null
+  labelOpts: LocalProxyLabelOpts
   /** 提交用；null = 自动分配。 */
   proxyId: string | null
 }
 
 /**
- * 创建槽位时的出口。本地代理固定第一，按目标 VPS 标成 `local:<IP>`：
- * 放到集群节点时它就是那台节点自身的出口。
+ * 创建槽位时的出口。本地代理固定第一，按目标节点标成「节点名local代理」。
  */
 export function useCreateExit(nodeId: string): CreateExit {
   const px = useQuery(proxiesQueryOptions())
@@ -49,7 +48,7 @@ export function useCreateExit(nodeId: string): CreateExit {
     'bind_limit',
     readPositive(cfg, 'bind_limit', 5)
   )
-  const vpsIp = useVpsIp(nodeId || null, proxies)
+  const labelOpts = useLocalProxyLabelOpts(nodeId || null)
   const options = sortedProxiesByAvailability(proxies, '', poolLimit).filter(
     (p) => p.id && proxyBindable(p) && proxyRemaining(p, '', poolLimit) > 0
   )
@@ -60,7 +59,7 @@ export function useCreateExit(nodeId: string): CreateExit {
     setValue: setPicked,
     options,
     poolLimit,
-    vpsIp,
+    labelOpts,
     proxyId: value === AUTO_EXIT ? null : value,
   }
 }
@@ -83,15 +82,17 @@ export function CreateExitField({
         <SelectContent>
           {exit.options.map((p) => (
             <SelectItem key={p.id} value={p.id || ''}>
-              {proxyOptionLabel(p, exit.poolLimit, exit.vpsIp)}
+              {proxyOptionLabel(p, exit.poolLimit, exit.labelOpts)}
             </SelectItem>
           ))}
           <SelectItem value={AUTO_EXIT}>自动分配空闲出口</SelectItem>
         </SelectContent>
       </Select>
       <p className='text-xs text-muted-foreground'>
-        本地代理 = {LOCAL_PROXY_HINT}（{localProxyText(exit.vpsIp)}
-        ）：槽位与控制面代发请求都从{remote ? '目标节点' : '本机'}自身出网。
+        本地代理 = {localProxyText(exit.labelOpts)}
+        ：槽位与控制面代发请求都从{remote ? '目标节点' : '本机'}
+        自身出网，绑定额度
+        {LOCAL_PROXY_SHARED_QUOTA}。
       </p>
     </div>
   )

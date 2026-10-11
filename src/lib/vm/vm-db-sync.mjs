@@ -22,6 +22,7 @@ import path from 'node:path'
 import { isDbOpen, getDb } from '../db/database.mjs'
 import { VmsRepo } from '../db/repos/vms-repo.mjs'
 import { setVmWriteHook, atomicWriteJson, isVmRecordFile } from './vm-file.mjs'
+import { repairVmProxyCliEnabled } from './vm-registry.mjs'
 
 let _repo = null
 let _watcher = null
@@ -143,6 +144,11 @@ export function initVmDbSync(projectRoot, { watch = true } = {}) {
     if (isVmJsonPath(filePath)) syncVmFile(filePath)
   })
   const result = reconcileVms(projectRoot)
+  try {
+    result.proxy_cli_repaired = repairVmProxyCliEnabled(projectRoot).length
+  } catch {
+    result.proxy_cli_repaired = 0
+  }
   if (watch) startVmWatch(projectRoot)
   return result
 }

@@ -57,7 +57,13 @@ export function LogDetailDialog({
           <DialogHeader className='border-b px-6 pt-5 pb-3'>
             <DialogTitle className='flex items-center gap-2'>
               请求详情
-              {row ? <StatusBadge statusCode={row.statusCode} /> : null}
+              {row ? (
+                <StatusBadge
+                  statusCode={row.statusCode}
+                  finalState={row.finalState}
+                  errorCode={row.errorCode}
+                />
+              ) : null}
             </DialogTitle>
             <DialogDescription className='font-mono text-xs break-all'>
               {row?.requestId || row?.id || '—'}

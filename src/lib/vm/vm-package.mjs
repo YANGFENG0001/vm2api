@@ -22,7 +22,7 @@ import {
 } from '../identity/workstation-fingerprint.mjs'
 import { VM_ORIGIN, canBindProxyToVm, normalizeOwnerId } from '../admin/resource-owner.mjs'
 import { readCodexAccounts, writeCodexAccounts } from './codex-slot.mjs'
-import { isLocalEgressProxy } from './egress.mjs'
+import { hasBoundExit, isLocalEgressProxy } from './egress.mjs'
 import { OS_CATALOG, STANDARD_LOCALE, nextNumericIndex, padVm, parseVmIndex } from './vm-runtime.mjs'
 import { parseSocks5Fields } from './proxy-pool.mjs'
 import { seedFreshCliHome } from './vm-recreate.mjs'
@@ -171,7 +171,7 @@ export function buildVmPackage({
       inference_engine: engineOf(vm.inference_engine) || '',
       dataplane: normalizeKernelDataplane(vm.dataplane, { inherit: true }) || '',
       auth_scheme: codex ? '' : normalizeAuthScheme(vm.claude?.auth_scheme || vm.auth_scheme),
-      proxy_cli_enabled: vm.proxy_cli_enabled === true,
+      proxy_cli_enabled: hasBoundExit(proxy || vm.proxy),
       schedulable: operatorSchedulable(vm),
       schedule_manual: vm.schedule_manual === true,
       policy: policyFromVm(vm, codex),
@@ -436,7 +436,7 @@ function applyTraits(vm, spec) {
     vm.claude = vm.claude && typeof vm.claude === 'object' ? vm.claude : {}
     if (traits.auth_scheme) vm.claude.auth_scheme = traits.auth_scheme
   }
-  vm.proxy_cli_enabled = traits.proxy_cli_enabled === true
+  // proxy_cli_enabled follows bindVmProxy, not the package trait.
   applyPolicy(vm, traits.policy, spec.codex)
   if (traits.seed_policy) vm.seed_policy = traits.seed_policy
   vm.updated_at = new Date().toISOString()
@@ -547,7 +547,7 @@ function finishControl(projectRoot, id, spec, status) {
   applyTraits(vm, spec)
   applySchedule(vm, spec, credentialPresent(spec, vm))
   vm.status = status
-  if (spec.vm.proxy_cli_enabled !== true) vm.proxy_cli_enabled = false
+  // Do not reset proxy_cli_enabled: attachProxy/bindVmProxy owns it.
   vm.updated_at = new Date().toISOString()
   atomicWriteJson(file, vm, { mode: 0o600 })
   return vm
@@ -682,7 +682,7 @@ export async function commitVmPackage({
   if (!attached.ok) return { ok: false, status: 400, error: attached.error }
   saved = finishControl(projectRoot, id, spec, status)
   if (written.account) mirrorCodex(saved, written.account)
-  if (spec.proxy && spec.vm.proxy_cli_enabled === true) saved.proxy_cli_enabled = true
+  // Flag already follows the bound exit from attachProxy.
   saved.updated_at = new Date().toISOString()
   atomicWriteJson(file, saved, { mode: 0o600 })
   return { ok: true, status: create ? 201 : 200, vm: saved, renamed_from: renamedFrom }

@@ -12,8 +12,11 @@ import {
   usageFromSseEvent,
   isDownstreamCommitEvent,
   restoreUncommittedHop,
+  semanticStatusForStreamError,
 } from '../../src/lib/transport/go-worker-client.mjs'
 import { extractOpenaiUsage } from '../../src/lib/protocol/openai-usage.mjs'
+import { callRustKernel, rustKernelHealth } from '../../src/lib/transport/rust-kernel-client.mjs'
+import { forwardApi, readApiJson } from '../../src/lib/transport/api-kernel-client.mjs'
 
 test('restoreUncommittedHop keeps a structured upstream code', () => {
   const restored = restoreUncommittedHop({
@@ -68,6 +71,58 @@ test('a coded kernel stream error keeps its code and the status it names', () =>
   })
   assert.equal(limited.status, 429)
   assert.equal(limited.headers['retry-after'], '42')
+})
+
+test('semanticStatusForStreamError reads outer Codex status 500 instead of defaulting to 502', () => {
+  assert.equal(
+    semanticStatusForStreamError({
+      type: 'error',
+      status: 500,
+      error: {
+        type: 'server_error',
+        code: 'server_error',
+        message: 'An error occurred while processing your request...',
+      },
+    }),
+    500,
+  )
+  assert.equal(
+    semanticStatusForStreamError({
+      type: 'error',
+      error: { type: 'api_error', code: 'kernel_unavailable', status: 503, message: 'named' },
+    }),
+    503,
+  )
+  assert.equal(
+    semanticStatusForStreamError({
+      type: 'error',
+      error: { type: 'server_error', code: 'server_error', message: 'no explicit status' },
+    }),
+    502,
+  )
+})
+
+test('restoreUncommittedHop reports Codex outer status 500 rather than 502', () => {
+  const restored = restoreUncommittedHop({
+    ok: false,
+    status: 200,
+    committed: false,
+    terminalState: 'incomplete',
+    headers: {},
+    body: {
+      type: 'error',
+      status: 500,
+      error: {
+        type: 'server_error',
+        code: 'server_error',
+        message: 'An error occurred while processing your request...',
+      },
+    },
+  })
+  assert.equal(restored.status, 500)
+  assert.equal(restored.streamError, true)
+  assert.equal(restored.terminalState, 'rejected')
+  assert.equal(restored.body.error.code, 'server_error')
 })
 
 test('setup-token worker envelope is inference-only', () => {
@@ -180,6 +235,7 @@ async function fixture(handler) {
 unixTest('callGoWorker sends envelope over authenticated Unix socket', async () => {
   const fx = await fixture(async (req, res) => {
     assert.equal(req.headers['x-internal-token'], 'internal-test')
+    assert.equal(req.headers['x-kin-internal-token'], 'internal-test')
     assert.equal(req.url, '/internal/v1/messages')
     const chunks = []
     for await (const chunk of req) chunks.push(chunk)
@@ -212,6 +268,66 @@ unixTest('callGoWorker sends envelope over authenticated Unix socket', async () 
     assert.equal(result.terminalState, 'verified')
     assert.equal(result.body.content[0].text, 'ok')
   } finally {
+    await fx.close()
+  }
+})
+
+unixTest('Rust health and inference authenticate with the namespaced kernel header', async () => {
+  const fx = await fixture(async (req, res) => {
+    res.setHeader('content-type', 'application/json')
+    if (req.headers['x-kin-internal-token'] !== 'internal-test') {
+      res.writeHead(401).end(JSON.stringify({ ok: false, error: { code: 'internal_auth_failed' } }))
+      return
+    }
+    if (req.url === '/internal/health') {
+      res.end(JSON.stringify({ ok: true, engine: 'rust', healthy: true, ready_slots: 20 }))
+      return
+    }
+    for await (const _chunk of req) {
+    }
+    res.end(JSON.stringify({ type: 'message', role: 'assistant', content: [{ type: 'text', text: 'ok' }] }))
+  })
+  try {
+    fx.exec.vm.runtime.kernel_socket = fx.exec.vm.runtime.worker_socket
+    const health = await rustKernelHealth(fx.exec)
+    assert.equal(health.status, 200)
+    assert.equal(health.ok, true)
+    const result = await callRustKernel({
+      exec: fx.exec,
+      body: { model: 'claude-test', messages: [{ role: 'user', content: 'hello' }] },
+    })
+    assert.equal(result.ok, true)
+    assert.equal(result.body.content[0].text, 'ok')
+  } finally {
+    await fx.close()
+  }
+})
+
+unixTest('API kernel forwarding uses the header required by its Go authorize handler', async () => {
+  const fx = await fixture(async (req, res) => {
+    res.setHeader('content-type', 'application/json')
+    if (req.headers['x-kin-internal-token'] !== 'internal-test') {
+      res.writeHead(401).end(JSON.stringify({ ok: false, error: { code: 'internal_auth_failed' } }))
+      return
+    }
+    assert.equal(req.url, '/internal/forward')
+    for await (const _chunk of req) {
+    }
+    res.end(JSON.stringify({ ok: true }))
+  })
+  const previousSocket = process.env.KIN_API_KERNEL_SOCK
+  const previousToken = process.env.KIN_API_KERNEL_TOKEN
+  try {
+    process.env.KIN_API_KERNEL_SOCK = fx.exec.vm.runtime.worker_socket
+    process.env.KIN_API_KERNEL_TOKEN = fx.exec.vm.runtime.worker_token_file
+    const response = await forwardApi({ cfg: {}, url: 'https://api.example.test/v1/messages', body: {} })
+    assert.equal(response.statusCode, 200)
+    assert.deepEqual(await readApiJson(response), { ok: true })
+  } finally {
+    if (previousSocket == null) delete process.env.KIN_API_KERNEL_SOCK
+    else process.env.KIN_API_KERNEL_SOCK = previousSocket
+    if (previousToken == null) delete process.env.KIN_API_KERNEL_TOKEN
+    else process.env.KIN_API_KERNEL_TOKEN = previousToken
     await fx.close()
   }
 })

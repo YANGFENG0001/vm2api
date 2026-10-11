@@ -6,6 +6,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { validTimezone } from '../core/timezone.mjs'
+import { hasBoundExit } from './egress.mjs'
 import { atomicWriteJson } from './vm-file.mjs'
 import { defaultSeedPolicy } from '../protocol/seed-policy.mjs'
 import { writeSlotSeedFiles } from './slot-seed.mjs'
@@ -88,7 +89,7 @@ export function buildRecreatedVmRecord(prev, generated) {
     updated_at: now,
     schedulable: false,
     schedule_disabled_reason: 'no_credential',
-    proxy_cli_enabled: prev.proxy_cli_enabled !== false,
+    proxy_cli_enabled: hasBoundExit(prev.proxy),
     seed_policy: defaultSeedPolicy(prev.seed_policy || {}),
     runtime: { type: prev.runtime?.type === 'kvm' ? 'kvm' : 'docker' },
     proxy_required: prev.proxy_required,

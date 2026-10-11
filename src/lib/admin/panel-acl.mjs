@@ -183,6 +183,10 @@ function userVmPathAllowed(method, path) {
       rest === 'count-tokens' ||
       rest === 'start' ||
       rest === 'stop' ||
+      rest === 'openai-quota/refresh' ||
+      rest === 'openai-quota/reset' ||
+      rest === 'claude-reset/query' ||
+      rest === 'claude-reset/redeem' ||
       rest.startsWith('oauth/')
     )
   }
@@ -207,7 +211,9 @@ function userKeyPathAllowed(method, path) {
   if (/^\/api\/panel\/api-keys\/[^/]+$/.test(path)) return method === 'GET' || method === 'PATCH' || method === 'DELETE'
   if (/^\/api\/panel\/api-keys\/[^/]+\/reveal$/.test(path) && method === 'POST') return true
   if (/^\/api\/panel\/api-keys\/[^/]+\/stats$/.test(path) && method === 'GET') return true
-  if (/^\/api\/panel\/api-keys\/[^/]+\/reset$/.test(path) && method === 'POST') return true
+  if (/^\/api\/panel\/api-keys\/[^/]+\/reset-quota$/.test(path) && method === 'POST') return true
+  // The handler already 404s keys the tenant does not own (denyIfUserMissesKey).
+  if (/^\/api\/panel\/api-keys\/[^/]+\/rotate$/.test(path) && method === 'POST') return true
   return false
 }
 

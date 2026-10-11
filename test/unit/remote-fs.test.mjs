@@ -13,7 +13,8 @@ test('remote atomic writes preserve UTF-8 byte offsets and do not follow destina
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kin-sftp-write-'))
   const handles = new Map()
   const connections = new Set()
-  const server = new Server({ hostKeys: [utils.generateKeyPairSync('ed25519').private] }, (conn) => {
+  // ssh2 1.17 emits a malformed ed25519 OpenSSH key ~0.4% of the time; ECDSA keys parse every time.
+  const server = new Server({ hostKeys: [utils.generateKeyPairSync('ecdsa', { bits: 256 }).private] }, (conn) => {
     connections.add(conn)
     conn.on('close', () => connections.delete(conn))
     conn.on('error', () => {})

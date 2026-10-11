@@ -58,7 +58,7 @@ export async function destroySlot(vm) {
   return slotHost(vm).destroy(vm)
 }
 
-/** Reload guest worker so a new bind-mounted / virtiofs binary is picked up. Never docker rm. */
+/** Reload guest worker so a new bind-mounted / virtiofs binary is picked up. Recreate only when the bound egress network moved; otherwise never docker rm. */
 export async function reloadSlot(vm, projectRoot, opts = {}) {
   return slotHost(vm).reload(vm, projectRoot, opts)
 }
