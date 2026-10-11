@@ -1012,3 +1012,25 @@ test('debug response body masks credentials that fit inside the capture window',
   assert.doesNotMatch(body, /ABCDEFGH12345678/)
   assert.match(body, /REDACTED/)
 })
+
+test('tenant log scope follows the slot owner at write time, not the current owner', () => {
+  const store = tmpStore()
+  store.db.exec(`
+    INSERT INTO users (id, email, username, password_hash) VALUES ('alice', 'a@x', 'alice', 'x'), ('bob', 'b@x', 'bob', 'x');
+    INSERT INTO vms (id, name, vm_json) VALUES ('vm-a', 'Slot A', '{}');
+  `)
+  logOne(store, { user_id: 'bob', vm_id: 'vm-a', error_code: 'upstream_error', status: 500 })
+  store.db.exec(`UPDATE vms SET owner_user_id = 'alice', origin = 'admin_assigned' WHERE id = 'vm-a'`)
+  const testChat = logOne(store, { api_key_kind: 'master', vm_id: 'vm-a', error_code: 'upstream_error', status: 500 })
+
+  const mine = store.queryNormal({ owner_user_id: 'alice' })
+  assert.deepEqual(
+    mine.items.map((r) => r.request_id),
+    [testChat.request_id],
+  )
+  assert.deepEqual(
+    store.windowStats({ owner_user_id: 'alice' }).error_collection.recent.map((r) => r.request_id),
+    [testChat.request_id],
+  )
+  assert.equal(store.queryNormal({}).total, 2)
+})

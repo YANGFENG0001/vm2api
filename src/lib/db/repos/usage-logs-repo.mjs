@@ -77,6 +77,7 @@ const SUMMARY_COLUMNS = [
   'outbound_session_id',
   'reasoning_effort',
   'intercept',
+  'vm_owner_user_id',
 ]
 
 function toRow(rec) {
@@ -236,6 +237,7 @@ export class UsageLogsRepo {
       INSERT OR IGNORE INTO request_log_debug (request_id, ts, record_json) VALUES (?, ?, ?)
     `)
     this._getDebug = db.prepare('SELECT record_json FROM request_log_debug WHERE request_id = ?')
+    this._vmOwner = db.prepare('SELECT owner_user_id FROM vms WHERE id = ?')
     this._listDebug = db.prepare('SELECT record_json FROM request_log_debug ORDER BY ts DESC LIMIT ?')
     this._getByRequestId = db.prepare('SELECT * FROM usage_logs WHERE request_id = ?')
     this._debugBytes = db.prepare('SELECT COALESCE(SUM(LENGTH(record_json)), 0) AS n FROM request_log_debug')
@@ -268,6 +270,11 @@ export class UsageLogsRepo {
   insertSummary(rec) {
     this._insert.run(...toRow(rec))
     return rec
+  }
+
+  vmOwnerOf(vmId) {
+    if (!vmId) return null
+    return this._vmOwner.get(String(vmId))?.owner_user_id || null
   }
 
   /** INSERT OR IGNORE (legacy import path). @returns true when inserted */
@@ -1117,7 +1124,7 @@ export class UsageLogsRepo {
       cache_creation_tokens: cacheWrite,
       prompt_tokens: cache.prompt_tokens,
       cache_hit_rate: cache.cache_hit_rate,
-      sticky: this._stickyWindow({ since, until }),
+      sticky: this._stickyWindow({ since, until, owner_user_id }),
       total_cost: Number(counts?.total_cost || 0),
       qps: {
         current: lastMinute ? Number(lastMinute.requests || 0) / 60 : 0,
@@ -1139,11 +1146,11 @@ export class UsageLogsRepo {
         avg_first_token_ms: r.avg_first_token_ms ?? null,
         avg_duration_ms: r.avg_duration_ms ?? null,
       })),
-      error_collection: this.errorCollection({ since, until }),
+      error_collection: this.errorCollection({ since, until, owner_user_id }),
     }
   }
 
-  _stickyWindow({ since = null, until = null } = {}) {
+  _stickyWindow({ since = null, until = null, owner_user_id = null } = {}) {
     const empty = { selections: 0, hits: 0, rate: null }
     try {
       const parts = []
@@ -1155,6 +1162,11 @@ export class UsageLogsRepo {
       if (until) {
         parts.push('started_at <= ?')
         params.push(until)
+      }
+      const own = ownerPred(owner_user_id)
+      if (own.sql) {
+        parts.push(`request_id IN (SELECT request_id FROM usage_logs WHERE ${own.sql})`)
+        params.push(...own.params)
       }
       const where = parts.length ? `WHERE ${parts.join(' AND ')}` : ''
       const rows = this.db
@@ -1181,9 +1193,10 @@ export class UsageLogsRepo {
     }
   }
 
-  errorCollection({ since = null, until = null } = {}) {
+  errorCollection({ since = null, until = null, owner_user_id = null } = {}) {
     const { cond, params } = timeCond(since, until)
-    const errCond = cond ? `${cond} AND ${ERROR_PRED}` : `WHERE ${ERROR_PRED}`
+    const own = ownerPred(owner_user_id)
+    const errCond = `${cond ? `${cond} AND ` : 'WHERE '}${ERROR_PRED}${own.sql ? ` AND ${own.sql}` : ''}`
     const rows = this.db
       .prepare(`
       SELECT created_at AS ts, request_id, status, error_code, error_message, model, upstream_model, vm_id, ip_address AS ip, api_key_presented
@@ -1191,17 +1204,18 @@ export class UsageLogsRepo {
       ORDER BY created_at DESC, id DESC
       LIMIT 2000
     `)
-      .all(...params)
+      .all(...params, ...own.params)
     return {
       ...collectErrors(rows),
-      ingress_hits: this.ingressHits({ since, until }),
+      ingress_hits: this.ingressHits({ since, until, owner_user_id }),
     }
   }
 
   /** Invalid-key 401s grouped by presented token + IP (still counted when muted). */
-  ingressHits({ since = null, until = null } = {}) {
+  ingressHits({ since = null, until = null, owner_user_id = null } = {}) {
     const { cond, params } = timeCond(since, until)
-    const authPred = ingressAuthSql()
+    const own = ownerPred(owner_user_id)
+    const authPred = own.sql ? `${ingressAuthSql()} AND ${own.sql}` : ingressAuthSql()
     const where = cond ? `${cond} AND ${authPred}` : `WHERE ${authPred}`
     try {
       return this.db
@@ -1218,7 +1232,7 @@ export class UsageLogsRepo {
         ORDER BY count DESC
         LIMIT 40
       `)
-        .all(...params)
+        .all(...params, ...own.params)
         .map((row) => ({
           api_key_presented: row.api_key_presented || '',
           ip: row.ip || '',

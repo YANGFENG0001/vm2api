@@ -1497,18 +1497,18 @@ export function createPanelHandler(ctx) {
         const bucket = (u.searchParams.get('bucket') || 'day').toLowerCase() === 'hour' ? 'hour' : 'day'
         const since = u.searchParams.get('since') || new Date(Date.now() - 7 * 86400_000).toISOString()
         const until = u.searchParams.get('until') || null
-        const owner_user_id =
-          panelIdentity(req).role === 'user' ? req.panelUserId : u.searchParams.get('user_id') || null
+        const tenant = panelIdentity(req).role === 'user'
+        const owner_user_id = tenant ? req.panelUserId : u.searchParams.get('user_id') || null
         return json(res, 200, {
           ok: true,
           bucket,
           since,
           until,
-          totals: requestLog.totals(),
+          totals: tenant ? null : requestLog.totals(),
           buckets: requestLog.aggregate({ since, until, bucket, owner_user_id }),
           window: requestLog.windowStats({ since, until, owner_user_id }),
           muted_error_classes: requestLog.snapshot().muted_error_classes,
-          config: requestLog.snapshot(),
+          config: tenant ? null : requestLog.snapshot(),
         })
       }
       if (req.method === 'GET' && /^\/api\/panel\/request-logs\/[^/]+\/attempts$/.test(p)) {

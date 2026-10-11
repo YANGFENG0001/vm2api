@@ -43,12 +43,12 @@ export const PROMPT_TOKENS_SQL = `CASE
   ELSE IFNULL(input_tokens, 0) + IFNULL(cache_read_tokens, 0) + IFNULL(cache_creation_tokens, 0)
 END`
 
-/** Rows a panel `user` owns: own user_id, one of their live keys, or one of their slots. */
+/** Rows a panel `user` owns: own user_id, one of their live keys, or served by a slot they owned at the time. */
 export function ownerPred(ownerUserId) {
   const id = String(ownerUserId || '').trim()
   if (!id) return { sql: '', params: [] }
   return {
-    sql: `(user_id = ? OR IFNULL(api_key_id, '') IN (SELECT id FROM api_keys WHERE user_id = ? AND deleted_at IS NULL) OR IFNULL(vm_id, '') IN (SELECT id FROM vms WHERE owner_user_id = ?))`,
+    sql: `(user_id = ? OR IFNULL(api_key_id, '') IN (SELECT id FROM api_keys WHERE user_id = ? AND deleted_at IS NULL) OR vm_owner_user_id = ?)`,
     params: [id, id, id],
   }
 }
