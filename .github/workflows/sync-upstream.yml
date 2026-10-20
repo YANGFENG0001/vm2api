@@ -1,0 +1,235 @@
+# 上游自动同步：高频轮询 + 变化检测。
+#
+# ---------------------------------------------------------------------------
+# 为什么不是「上游一 push 就触发」？
+#   GitHub Actions 只能被**本仓库**的事件触发，没有任何原生方式能监听
+#   另一个仓库（dofastted/vm2api）的 push。跨仓库触发需要上游主动往你的
+#   fork 发 repository_dispatch，这需要上游配合，不现实。
+#   所以业界标准做法就是这里采用的：高频轮询 + 一次 API 调用做变化检测。
+#
+#   没变化时：只跑「Detect upstream changes」一步，约 10 秒结束，不拉仓库。
+#   有变化时：才 checkout（本仓库约 438MB，全量 clone 较慢）+ 合并 + 推送。
+#
+# ⚠️⚠️ 实测：GitHub 对 fork 仓库**不运行 schedule 事件**。
+#   本 fork 建立 20 小时、挂着 */10 的 cron，跨过几十个 cron 边界，
+#   本工作流的运行次数始终是 1 —— 而且那 1 次是手动 workflow_dispatch。
+#   用 API disable→enable 重新注册后依旧为 0。docker-image.yml 那边也一样。
+#   所以「轮询」不能靠 cron，必须有一个**仓库外部**的触发器。
+#
+#   现成的触发器：家宽机 108 上的 systemd timer 会往 `mirror-trigger` 分支
+#   推空提交（它本来是为 docker-image 准备的）。这里直接复用：
+#   push 到 mirror-trigger 时也跑一次同步，用户侧不需要改任何东西。
+#   于是每 5 分钟一次外部心跳同时驱动「同步上游」+「搬运镜像」。
+#
+#   注意：GitHub 的 cron 不是精确时刻，高峰期可能延迟数分钟到数十分钟；
+#   另外仓库连续 60 天无活动时 GitHub 会自动停用定时工作流。
+# ---------------------------------------------------------------------------
+#
+# ⚠️ 强烈建议配置一个 PAT 放进仓库 Secret `SYNC_TOKEN`。
+#    用默认的 GITHUB_TOKEN 有两个硬伤：
+#      1. GITHUB_TOKEN 不允许推送对 .github/workflows/ 下文件的改动
+#         （报错 "refusing to allow a GitHub App to create or update workflow"），
+#         而上游几乎每次发版都会改自己的工作流文件，同步会直接失败。
+#      2. GITHUB_TOKEN 推送产生的 commit 不会触发其它工作流 ——
+#         同步成功后 docker-image.yml 不会自动构建新镜像。
+#    PAT 做法：Settings → Developer settings → Personal access tokens
+#      · classic：勾选 repo + workflow
+#      · 或 fine-grained：本仓库授予 Contents: Read and write + Workflows: Read and write
+#    然后 仓库 Settings → Secrets and variables → Actions → New repository secret，
+#    名字填 SYNC_TOKEN。
+# ---------------------------------------------------------------------------
+# ⚠️ 绝对不要在这个工作流里往 fork 推送 git tag。
+#    本仓库保留了上游自带的 release.yml，它的触发条件是 `on: push: tags: ['v*']`，
+#    会为每个 tag 跑一整套多架构构建（amd64 + arm64 + manifest，40~60 分钟）。
+#    上游历史上有 100+ 个 vX.Y.Z tag，一次全推会瞬间排队上百个构建。
+#    fork 的镜像由 docker-image.yml 直接镜像上游，不需要 git tag，也不需要 release.yml。
+#    如果哪天确实要用 VM2API_GITHUB_REPO 指向本 fork，请先在
+#    Actions 页面把 release 工作流 Disable 掉，再考虑镜像 tag。
+# ---------------------------------------------------------------------------
+name: sync-upstream
+
+on:
+  schedule:
+    # 每 10 分钟检测一次上游是否领先本 fork。
+    # ⚠️ 本 fork 上实测不触发（见头部说明），真正干活的是下面 push 里的
+    #    mirror-trigger —— 家宽机 108 的 systemd timer 推空提交来驱动。
+    - cron: '*/10 * * * *'
+  push:
+    # 家宽机 108 的 systemd timer 每 5 分钟推一次空提交（发现 fork GHCR 缺
+    # 上游最新 tag 时）。复用它当同步心跳，用户侧不需要改任何东西。
+    branches: [mirror-trigger]
+  workflow_dispatch:
+    inputs:
+      upstream_branch:
+        description: '上游分支（默认 main）'
+        required: false
+        default: 'main'
+      force:
+        description: '忽略变化检测，强制同步'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  UPSTREAM_REPO: dofastted/vm2api
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Warn when SYNC_TOKEN is missing
+        env:
+          SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
+        run: |
+          if [ -z "${SYNC_TOKEN}" ]; then
+            echo "::warning::未配置 SYNC_TOKEN，将回退到 GITHUB_TOKEN：无法推送 .github/workflows 下的改动，也不会触发 docker-image.yml。"
+          fi
+
+      - name: Detect upstream changes
+        id: detect
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+          UPSTREAM_BRANCH: ${{ github.event.inputs.upstream_branch || 'main' }}
+          FORCE: ${{ github.event.inputs.force }}
+        run: |
+          set -euo pipefail
+          if [ "${FORCE}" = "true" ]; then
+            echo "手动强制同步，跳过变化检测。"
+            echo "changed=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          # ⚠️ 跨仓库 compare 的 head 必须写成 {owner}:{repo}:{branch}。
+          #    写成 {owner}/{repo}:{branch}（中间是斜杠）会直接 404，而 404 的
+          #    响应体里没有 ahead_by，又被旧版的 `|| echo 0` 吞成 0 →
+          #    每次都判定「上游无新提交」→ 同步**静默失效**。
+          #    实测：fork 的 VERSION 卡在 1.3.114、上游已经 1.3.118，落后 4 个
+          #    版本，而工作流一路报 Nothing to do / success，谁也看不出来。
+          up_owner="${UPSTREAM_REPO%%/*}"
+          up_name="${UPSTREAM_REPO##*/}"
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}/compare/${UPSTREAM_BRANCH}...${up_owner}:${up_name}:${UPSTREAM_BRANCH}"
+
+          body="${RUNNER_TEMP}/compare.json"
+          code="$(curl -sS --retry 3 --retry-delay 2 -o "${body}" -w '%{http_code}' \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H 'Accept: application/vnd.github+json' \
+            "${api}")"
+          echo "compare API: HTTP ${code}"
+          echo "  ${api}"
+
+          # 检测本身失败时必须报错，绝不能退化成「上游无更新」——
+          # 正是这个静默降级让上面的 404 藏了好几个小时。
+          if [ "${code}" != "200" ]; then
+            echo "::error::compare API 返回 HTTP ${code}，无法判断上游是否有更新"
+            head -c 300 "${body}" || true
+            exit 1
+          fi
+
+          ahead="$(node -e '
+            const fs = require("fs");
+            let d = {};
+            try { d = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); } catch {}
+            process.stdout.write(Number.isInteger(d.ahead_by) ? String(d.ahead_by) : "NONE");
+          ' "${body}")"
+
+          if ! printf '%s' "${ahead}" | grep -Eq '^[0-9]+$'; then
+            echo "::error::compare 响应里取不到 ahead_by（拿到：${ahead}）"
+            exit 1
+          fi
+
+          echo "上游领先本 fork ${ahead} 个提交"
+          if [ "${ahead}" -gt 0 ] 2>/dev/null; then
+            echo "changed=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+          fi
+          {
+            echo "### 上游变化检测"
+            echo ""
+            echo "- 上游 \`${UPSTREAM_REPO}:${UPSTREAM_BRANCH}\` 领先本 fork：**${ahead}** 个提交"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Nothing to do
+        if: steps.detect.outputs.changed != 'true'
+        run: echo "上游无新提交，跳过同步。"
+
+      - name: Checkout fork main
+        if: steps.detect.outputs.changed == 'true'
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Configure git identity
+        if: steps.detect.outputs.changed == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        if: steps.detect.outputs.changed == 'true'
+        env:
+          UPSTREAM_BRANCH: ${{ github.event.inputs.upstream_branch || 'main' }}
+        run: |
+          set -euo pipefail
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git" 2>/dev/null \
+            || git remote set-url upstream "https://github.com/${UPSTREAM_REPO}.git"
+          # --force：上游若移动过同名 tag，不要因此让整个同步失败
+          git fetch upstream --tags --prune --force
+
+      - name: Merge upstream into main
+        id: merge
+        if: steps.detect.outputs.changed == 'true'
+        shell: bash
+        env:
+          UPSTREAM_BRANCH: ${{ github.event.inputs.upstream_branch || 'main' }}
+        run: |
+          set -euo pipefail
+          git checkout main
+          upstream_ref="upstream/${UPSTREAM_BRANCH}"
+          if ! git rev-parse --verify --quiet "${upstream_ref}" >/dev/null; then
+            echo "::error::上游分支 ${upstream_ref} 不存在"
+            exit 1
+          fi
+          if git merge-base --is-ancestor "${upstream_ref}" HEAD; then
+            echo "已经是最新，无需合并。"
+            echo "merged=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          if git merge --no-edit "${upstream_ref}"; then
+            echo "merged=true" >> "${GITHUB_OUTPUT}"
+          else
+            git merge --abort || true
+            echo "::error::与上游 ${upstream_ref} 合并冲突，已中止合并，未做任何推送。请本地手动解决冲突后再推送。"
+            exit 1
+          fi
+
+      - name: Push to fork
+        if: steps.merge.outputs.merged == 'true'
+        run: git push origin main
+
+      - name: Write job summary
+        if: always()
+        run: |
+          {
+            echo "### 上游同步结果"
+            echo ""
+            if [ "${{ steps.detect.outputs.changed }}" != "true" ]; then
+              echo "- ⏭️ 上游无新提交，跳过"
+            elif [ "${{ steps.merge.outputs.merged }}" = "true" ]; then
+              echo "- ✅ 已合并上游并推送到 \`main\`"
+            elif [ "${{ steps.merge.outputs.merged }}" = "false" ]; then
+              echo "- ⏭️ 已是最新，无需合并"
+            else
+              echo "- ⚠️ 未完成，详见上方日志"
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
