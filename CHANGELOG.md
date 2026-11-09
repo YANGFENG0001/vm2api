@@ -2,6 +2,7 @@
 
 ## 未发布
 
+- 版本号改为 `1.3.201-fork.1`：本 fork 自建的控制面镜像用它打标，避免覆盖 GHCR 上从上游镜像来的 `v1.3.201`，也让「哪个镜像是自己构建的」一眼可辨。
 - 新增 Fable 5.2（`claude-fable-5-2`，点号 `claude-fable-5.2` 作别名）：1M 上下文、128K 输出、自适应思考与 effort，列价降到 $8/$40，cache 5m $10 / 1h $16 / read $0.20；fast mode 走 $16/$80。`fable` 家族别名按目录排序落到 5.2。报价表、`claude-fable-5-2` beta 协商、Key/槽位模型白名单的版本隔离同步跟上。
 - 拒答近似命中不再把 Claude Code 注入的 `<system-reminder>` 样板当成用户正文：一次 AUP 拒答曾把「Attribution for git commits…」这类每轮都一样的提醒写进 MinHash，之后任何请求都 ≥90% 相似，进而重新封设备。现在算相似度前先剔掉该块（嵌套与未闭合都处理），短问不再产出签名，也就不会误判为相似。
 
