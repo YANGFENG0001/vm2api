@@ -2,6 +2,8 @@
 
 ## 未发布
 
+- 拒答近似命中不再把 Claude Code 注入的 `<system-reminder>` 样板当成用户正文：一次 AUP 拒答曾把「Attribution for git commits…」这类每轮都一样的提醒写进 MinHash，之后任何请求都 ≥90% 相似，进而重新封设备。现在算相似度前先剔掉该块（嵌套与未闭合都处理），短问不再产出签名，也就不会误判为相似。
+
 - 面板租户（role=user）权限收紧：导入凭证、导入代理时绑定槽位、API Key 的 `allowed_vms` 只认本人的槽（他人的与不存在的同样回 404）；租户改 Key 时忽略 `user_id`、`group_id`，`vm_pool_id` 仅管理员可设（非管理员带值回 403 `key_pool_forbidden`，前端隐藏账号池）；改角色或停用用户时撤销其全部面板会话；`GET /api/panel/test-models` 对租户与 super 只读放行，带他人 `vm_id` 回 404，`refresh=1` 仅管理员生效。
 - Docker 槽在线扩容：面板成功须 HostConfig 内存与 swap 一致；可读 cgroup 时核对 v2 `memory.max` 或 v1 `memory.limit_in_bytes`（`max`/无上限哨兵在 HostConfig 已匹配时跳过）。扩容后校验失败会 docker update 回滚至扩容前限额且不写 vm 配置。（#623，REQ-0441）
 

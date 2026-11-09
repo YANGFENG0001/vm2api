@@ -20,6 +20,7 @@ import {
   refusalSignature,
   refusalUserDocument,
   signatureSimilarity,
+  stripSystemReminders,
 } from '../../src/lib/core/refusal-similarity.mjs'
 
 function longUser(seed, extra = '') {
@@ -51,6 +52,53 @@ test('user document ignores a shared system prefix', () => {
   const b = body(longUser('attack-two-completely-different-ask'))
   assert.equal(refusalUserDocument(a).includes('claude code'), false)
   assert.notEqual(refusalUserDocument(a), refusalUserDocument(b))
+})
+
+const REMINDER =
+  '<system-reminder>\n' +
+  'Attribution for git commits and pull requests you create from here on: keep the reported lines.\n'.repeat(12) +
+  '</system-reminder>\n'
+
+test('stripSystemReminders drops nested and unterminated blocks', () => {
+  assert.equal(
+    stripSystemReminders('a<system-reminder>b<system-reminder>c</system-reminder>d</system-reminder>e'),
+    'ae',
+  )
+  assert.equal(stripSystemReminders('keep<system-reminder>unterminated tail'), 'keep')
+  assert.equal(stripSystemReminders('plain user ask'), 'plain user ask')
+})
+
+test('an injected system-reminder block never joins the refusal document', () => {
+  const doc = refusalUserDocument(body(`${REMINDER}Refactor the retry loop.`))
+  assert.equal(doc.includes('Attribution for git commits'), false)
+  assert.equal(doc.includes('refactor the retry loop.'), true)
+})
+
+test('different asks under the same reminder are not a near match', () => {
+  const a = body(`${REMINDER}${longUser('scheduler-retry-loop')}`)
+  const b = body(`${REMINDER}${longUser('release-note-drafting')}`)
+  assert.notEqual(refusalUserDocument(a), refusalUserDocument(b))
+  const score = signatureSimilarity(refusalSignature(refusalUserDocument(a)), refusalSignature(refusalUserDocument(b)))
+  assert.ok(score < REFUSAL_SIMILARITY, `score ${score}`)
+})
+
+test('a short ask under a long reminder has no signature instead of a false similar', () => {
+  // Before stripping, ~95% of the document was the shared reminder, so every
+  // short ask looked like the refused one and re-banned the device.
+  assert.equal(refusalSignature(refusalUserDocument(body(`${REMINDER}Yes, continue.`))), null)
+})
+
+test('the same ask keeps matching when only the reminder text changes', () => {
+  const ask = longUser('payload')
+  const other =
+    '<system-reminder>\n' +
+    'A different reminder body that Claude Code injected later on.\n'.repeat(12) +
+    '</system-reminder>\n'
+  const score = signatureSimilarity(
+    refusalSignature(refusalUserDocument(body(`${REMINDER}${ask}`))),
+    refusalSignature(refusalUserDocument(body(`${other}${ask}`))),
+  )
+  assert.ok(score >= REFUSAL_SIMILARITY, `score ${score}`)
 })
 
 test('a 10 percent tail edit stays at or above 90 percent and a 40 percent rewrite does not', () => {

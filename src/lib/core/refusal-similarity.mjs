@@ -25,6 +25,43 @@ function isToolPayload(block) {
   return type === 'tool_result' || type === 'function_call_output' || type.endsWith('_tool_result')
 }
 
+const REMINDER_OPEN = '<system-reminder>'
+const REMINDER_CLOSE = '</system-reminder>'
+
+/**
+ * Claude Code injects the same long reminder boilerplate into every user turn.
+ * It is client scaffolding, not the ask: leaving it in makes every request look
+ * like the one that got refused, which re-bans the device after one AUP hit.
+ * Nested blocks are removed depth-first; an unterminated block drops the tail.
+ */
+export function stripSystemReminders(raw) {
+  const s = String(raw || '')
+  let pos = s.indexOf(REMINDER_OPEN)
+  if (pos < 0) return s
+  let out = ''
+  let from = 0
+  while (pos >= 0) {
+    out += s.slice(from, pos)
+    let depth = 1
+    let cur = pos + REMINDER_OPEN.length
+    while (cur < s.length && depth > 0) {
+      const nextOpen = s.indexOf(REMINDER_OPEN, cur)
+      const nextClose = s.indexOf(REMINDER_CLOSE, cur)
+      if (nextClose < 0) return out
+      if (nextOpen >= 0 && nextOpen < nextClose) {
+        depth += 1
+        cur = nextOpen + REMINDER_OPEN.length
+        continue
+      }
+      depth -= 1
+      cur = nextClose + REMINDER_CLOSE.length
+    }
+    from = cur
+    pos = s.indexOf(REMINDER_OPEN, from)
+  }
+  return out + s.slice(from)
+}
+
 function contentToText(content, includeToolResults = true) {
   if (typeof content === 'string') return content
   if (Array.isArray(content)) {
@@ -71,11 +108,11 @@ function userTexts(body, includeToolResults = true) {
   const messages = Array.isArray(body.messages) ? body.messages : []
   for (const message of messages) {
     if (message?.role === 'user') {
-      const text = contentToText(message.content, includeToolResults)
+      const text = stripSystemReminders(contentToText(message.content, includeToolResults))
       if (text) out.push(text)
     }
   }
-  out.push(...responsesInputTexts(body.input, includeToolResults))
+  out.push(...responsesInputTexts(body.input, includeToolResults).map(stripSystemReminders))
   return out
 }
 
