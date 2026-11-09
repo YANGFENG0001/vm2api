@@ -36,6 +36,9 @@ function keysIntersect(left, right) {
       // The corrected 5-1 id must not widen a Fable 5 allowlist (or vice versa).
       const fable51 = /^claude-fable-5(?:-1|\.1)(?:-|$)/
       if (fable51.test(a) !== fable51.test(b)) continue
+      // 5.2 is its own catalog entry: a bare fable-5 allowlist must not cover it.
+      const fable52 = /^claude-fable-5(?:-2|\.2)(?:-|$)/
+      if (fable52.test(a) !== fable52.test(b)) continue
       // claude-opus-5 is a prefix of claude-opus-5-5. They are different models.
       const opus55 = /^claude-opus-5(?:-5|\.5)(?:-|$)/
       if (opus55.test(a) !== opus55.test(b)) continue

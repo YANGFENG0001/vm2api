@@ -39,6 +39,8 @@ const SETTINGS_KEY = 'model_policy'
 const CONTEXT_1M = CONTEXT_1M_BETA
 const FABLE_51_ID = 'claude-fable-5-1'
 const FABLE_51_LEGACY_ID = 'claude-fable-5.1'
+const FABLE_52_ID = 'claude-fable-5-2'
+const FABLE_52_LEGACY_ID = 'claude-fable-5.2'
 const OPUS_55_ID = 'claude-opus-5-5'
 const OPUS_55_LEGACY_ID = 'claude-opus-5.5'
 const SONNET_55_ID = 'claude-sonnet-5-5'
@@ -377,6 +379,23 @@ export function seedDefaultPolicy() {
     aliases: [FABLE_51_LEGACY_ID],
   })
 
+  // 2026-11-09. Same 1M window / 128K output as 5.1, list price cut to $8/$40
+  // and default effort medium in Claude Code. Dotted id is only an alias.
+  add(FABLE_52_ID, {
+    display_name: 'Fable 5.2',
+    family: 'fable',
+    sort: 42,
+    capabilities: CAP_ADAPTIVE_ONLY,
+    betas: { pass_context_1m: false },
+    params: {
+      max_tokens_default: 32000,
+      max_tokens_cap: 128000,
+      on_adaptive: 'passthrough',
+      on_enabled: 'passthrough',
+    },
+    aliases: [FABLE_52_LEGACY_ID],
+  })
+
   return {
     version: 1,
     updated_at: new Date().toISOString(),
@@ -400,6 +419,7 @@ export function seedDefaultPolicy() {
       'claude-3-5-haiku-latest': 'claude-haiku-4-5-20251001',
       fable: 'claude-fable-5',
       [FABLE_51_LEGACY_ID]: FABLE_51_ID,
+      [FABLE_52_LEGACY_ID]: FABLE_52_ID,
       [OPUS_55_LEGACY_ID]: OPUS_55_ID,
     },
     catalog_mode: 'policy_only',
@@ -435,9 +455,10 @@ export function normalizePolicy(raw) {
     // Old releases stored the unsupported dotted id. Preserve its overrides;
     // an explicitly configured canonical entry wins field-by-field below.
     models[FABLE_51_ID] = deepMergeEntry(models[FABLE_51_ID], raw.models[FABLE_51_LEGACY_ID])
+    models[FABLE_52_ID] = deepMergeEntry(models[FABLE_52_ID], raw.models[FABLE_52_LEGACY_ID])
     models[OPUS_55_ID] = deepMergeEntry(models[OPUS_55_ID], raw.models[OPUS_55_LEGACY_ID])
     for (const [id, cfg] of Object.entries(raw.models)) {
-      if (!id || id === FABLE_51_LEGACY_ID || id === OPUS_55_LEGACY_ID) continue
+      if (!id || id === FABLE_51_LEGACY_ID || id === FABLE_52_LEGACY_ID || id === OPUS_55_LEGACY_ID) continue
       const base =
         models[id] ||
         entry({
@@ -465,6 +486,15 @@ export function normalizePolicy(raw) {
     ]),
   ]
   if ('id' in models[FABLE_51_ID]) models[FABLE_51_ID].id = FABLE_51_ID
+  models[FABLE_52_ID].aliases = [
+    ...new Set([
+      FABLE_52_LEGACY_ID,
+      ...[raw.models?.[FABLE_52_LEGACY_ID]?.aliases, raw.models?.[FABLE_52_ID]?.aliases].flatMap((aliases) =>
+        Array.isArray(aliases) ? aliases : [],
+      ),
+    ]),
+  ]
+  if ('id' in models[FABLE_52_ID]) models[FABLE_52_ID].id = FABLE_52_ID
   models[OPUS_55_ID].aliases = [
     ...new Set([
       OPUS_55_LEGACY_ID,
@@ -493,9 +523,11 @@ export function normalizePolicy(raw) {
   for (const [alias, target] of Object.entries(aliases)) {
     const normalized = String(target).trim().toLowerCase()
     if (normalized === FABLE_51_LEGACY_ID) aliases[alias] = FABLE_51_ID
+    if (normalized === FABLE_52_LEGACY_ID) aliases[alias] = FABLE_52_ID
     if (normalized === OPUS_55_LEGACY_ID) aliases[alias] = OPUS_55_ID
   }
   aliases[FABLE_51_LEGACY_ID] = FABLE_51_ID
+  aliases[FABLE_52_LEGACY_ID] = FABLE_52_ID
   aliases[OPUS_55_LEGACY_ID] = OPUS_55_ID
   return {
     version: Number(raw.version) || 1,
@@ -959,6 +991,7 @@ export function filterPublicModelIds(workerIds = []) {
     ...new Set(
       (workerIds || []).filter(Boolean).map((id) => {
         if (id === FABLE_51_LEGACY_ID) return FABLE_51_ID
+        if (id === FABLE_52_LEGACY_ID) return FABLE_52_ID
         if (id === OPUS_55_LEGACY_ID) return OPUS_55_ID
         return id
       }),
@@ -988,7 +1021,14 @@ export function syncWorkerModelsIntoPolicy(workerIds = [], { displayNameOf = nul
   const added = []
   const enabled = policy.catalog_mode === 'worker_only'
   for (const workerId of workerIds || []) {
-    const id = workerId === FABLE_51_LEGACY_ID ? FABLE_51_ID : workerId === OPUS_55_LEGACY_ID ? OPUS_55_ID : workerId
+    const id =
+      workerId === FABLE_51_LEGACY_ID
+        ? FABLE_51_ID
+        : workerId === FABLE_52_LEGACY_ID
+          ? FABLE_52_ID
+          : workerId === OPUS_55_LEGACY_ID
+            ? OPUS_55_ID
+            : workerId
     if (!id || !isCatalogModelId(id)) continue
     if (/^gpt/i.test(id)) continue
     if (policy.models[id]) continue

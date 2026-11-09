@@ -4,6 +4,8 @@ import { matchesAllowedModel, toggleAllowedModel } from './allowed-models'
 const fable5 = 'claude-fable-5'
 const fable51 = 'claude-fable-5-1'
 const legacyFable51 = 'claude-fable-5.1'
+const fable52 = 'claude-fable-5-2'
+const legacyFable52 = 'claude-fable-5.2'
 
 describe('slot model allowlist compatibility', () => {
   it('checks the canonical model for a saved dotted id', () => {
@@ -22,6 +24,15 @@ describe('slot model allowlist compatibility', () => {
     expect(
       matchesAllowedModel('claude-haiku-4-5-20251001', 'claude-haiku-4-5')
     ).toBe(true)
+  })
+
+  it('keeps Fable 5.2 separate from 5 and 5.1 while accepting its dotted id', () => {
+    expect(matchesAllowedModel(fable52, legacyFable52)).toBe(true)
+    expect(matchesAllowedModel(legacyFable52, fable52)).toBe(true)
+    expect(matchesAllowedModel(fable52, 'claude-fable-5-2-20261107')).toBe(true)
+    expect(matchesAllowedModel(fable52, fable51)).toBe(false)
+    expect(matchesAllowedModel(fable52, fable5)).toBe(false)
+    expect(matchesAllowedModel(fable5, fable52)).toBe(false)
   })
 
   it('unchecks a saved legacy id without removing Fable 5', () => {

@@ -3,6 +3,7 @@ export function canonicalAllowedModelId(id: string) {
   return String(id)
     .trim()
     .replace(/^claude-fable-5(?:\.1|-1)(?=-|$)/i, 'claude-fable-5-1')
+    .replace(/^claude-fable-5\.2(?=-|$)/i, 'claude-fable-5-2')
     .replace(/^claude-opus-5(?:\.5|-5)(?=-|$)/i, 'claude-opus-5-5')
 }
 
@@ -13,6 +14,8 @@ export function matchesAllowedModel(modelId: string, entry: string) {
   if (model === allowed) return true
   const fable51 = /^claude-fable-5-1(?:-|$)/
   if (fable51.test(model) !== fable51.test(allowed)) return false
+  const fable52 = /^claude-fable-5-2(?:-|$)/
+  if (fable52.test(model) !== fable52.test(allowed)) return false
   const opus55 = /^claude-opus-5-5(?:-|$)/
   if (opus55.test(model) !== opus55.test(allowed)) return false
   return model.startsWith(`${allowed}-`) || allowed.startsWith(`${model}-`)

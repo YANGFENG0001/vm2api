@@ -189,6 +189,19 @@ test('claude-fable-5.1 resolves to claude-fable-5-1 with $0.25 read', () => {
   assert.equal(resolvePrice('anthropic/claude-fable-5.1[1m]').id, 'claude-fable-5-1')
 })
 
+test('claude-fable-5.2 keeps its own $8/$40 row, dotted id and fast mode included', () => {
+  const r = resolvePrice('claude-fable-5.2')
+  assert.equal(r.id, 'claude-fable-5-2')
+  assert.equal(r.price.input, 8)
+  assert.equal(r.price.output, 40)
+  assert.equal(r.price.cache_read, 0.2)
+  assert.equal(r.price.cache_5m, 10)
+  assert.equal(r.price.cache_1h, 16)
+  assert.equal(resolvePrice('anthropic/claude-fable-5-2').id, 'claude-fable-5-2')
+  // A 5.1 row must not absorb the 5.2 price cut.
+  assert.equal(resolvePrice('claude-fable-5-1').price.input, 10)
+})
+
 test('claude-sonnet-5-5 does not fall through to claude-sonnet-5', () => {
   const r = resolvePrice('claude-sonnet-5-5')
   assert.equal(r.id, 'claude-sonnet-5-5')
