@@ -834,7 +834,7 @@ const importCommit = createImportCommit({
 
 const { commitImportedOauth, requireSlotProxy, officialCcStatsHandler } = importCommit
 
-const { handleProtocol, handleSearch } = createHandleProtocol({
+const { handleProtocol, handleSearch, handleImages } = createHandleProtocol({
   json,
   writeSSEHeaders,
   readBody,
@@ -1127,8 +1127,10 @@ const server = http.createServer(async (req, res) => {
       return await handleUserUsage(req, res, {
         json,
         requireAuth,
+        apiKeyStore,
         stickyRouter,
         accountQuota,
+        projectRoot: cfg.paths.project,
         getPoolScheduler: () => poolScheduler,
       })
     }
@@ -1137,6 +1139,7 @@ const server = http.createServer(async (req, res) => {
         json,
         readBody,
         requireAuth,
+        apiKeyStore,
         cfg,
         stickyRouter,
         accountQuota,
@@ -1168,6 +1171,12 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'POST' && (p === '/v1/alpha/search' || p === '/alpha/search')) {
       return await handleSearch(req, res, p)
+    }
+    if (req.method === 'POST' && (p === '/v1/images/generations' || p === '/images/generations')) {
+      return await handleImages(req, res, p, 'generations')
+    }
+    if (req.method === 'POST' && (p === '/v1/images/edits' || p === '/images/edits')) {
+      return await handleImages(req, res, p, 'edits')
     }
 
     json(res, 404, { error: { message: `not found: ${p}` } })
