@@ -280,7 +280,9 @@ test('VERSION is the only application release version source', () => {
   const compose = fs.readFileSync(path.join(root, 'docker-compose.yml'), 'utf8')
   const vite = fs.readFileSync(path.join(root, 'web', 'vite.config.ts'), 'utf8')
 
-  assert.match(version, /^\d+\.\d+\.\d+$/)
+  // 本 fork 用 `1.3.201-fork.N` 标记自建镜像，避免与上游同名 tag 互相覆盖；
+  // 主干版本仍然是三段数字，后缀只做区分。
+  assert.match(version, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?$/)
   assert.equal(Object.hasOwn(pkg, 'version'), false)
   assert.equal(Object.hasOwn(lock, 'version'), false)
   assert.equal(Object.hasOwn(lock.packages[''], 'version'), false)
