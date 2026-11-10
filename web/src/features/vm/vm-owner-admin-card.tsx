@@ -98,6 +98,10 @@ export function VmOwnerAdminCard({ vm }: { vm: Vm }) {
         pending={isPending}
         onOpenChange={setAssignOpen}
         onConfirm={(userId) => setOwner(userId)}
+        onReclaim={() => {
+          setAssignOpen(false)
+          setReclaimOpen(true)
+        }}
       />
       <ConfirmDialog
         open={reclaimOpen}

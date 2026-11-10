@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { VIEW_TITLES } from '@/config/nav'
 import type { ApiKeyItem } from '@/types/panel-keys'
@@ -25,6 +25,7 @@ import { QueryGate } from '@/components/query-gate'
 import { StatusMark } from '@/components/status-mark'
 import { meQueryOptions } from '@/features/auth/queries'
 import { apiKeysQueryOptions } from '@/features/keys/queries'
+import { usersQueryOptions } from '@/features/users/queries'
 import { vmsListQueryOptions } from '@/features/vm/queries'
 import {
   keyExpiryText,
@@ -56,6 +57,16 @@ export function KeysPage() {
   const [revealed, setRevealed] = useState<RevealedKey | null>(null)
   const [delId, setDelId] = useState('')
   const keys = q.data?.keys || []
+  // 管理员视图把租户密钥单独划出来：它们的 user_id 非空，作用域永远是「自己的槽位」，
+  // 混在平台密钥里既看不出归属，也容易误改成平台作用域。
+  const users = useQuery({ ...usersQueryOptions(), enabled: isAdmin && keys.some((k) => k.user_id) })
+  const ownerNameOf = (id?: string | null) => {
+    const key = String(id || '').trim()
+    if (!key) return ''
+    return users.data?.items?.find((u) => u.id === key)?.username || key
+  }
+  const tenantKeys = isAdmin ? keys.filter((k) => !!String(k.user_id || '').trim()) : []
+  const platformKeys = isAdmin ? keys.filter((k) => !String(k.user_id || '').trim()) : keys
   const editing = keys.find((k) => k.id === editId) || null
   const rotating = keys.find((k) => k.id === rotateId) || null
   const refresh = () =>
@@ -193,6 +204,31 @@ export function KeysPage() {
     }
   }
 
+  const busy =
+    toggle.isPending || resetQuota.isPending || reveal.isPending || rotate.isPending
+
+  const keyRowNode = (k: ApiKeyItem, ownerName?: string) => (
+    <KeyRow
+      key={k.id}
+      item={k}
+      ownerName={ownerName}
+      busy={busy}
+      onView={() => void viewPlain(k)}
+      onCopy={() => void copyPlain(k)}
+      onRotate={() => setRotateId(k.id)}
+      onEdit={() => setEditId(k.id)}
+      onStats={() => setStatsId(k.id)}
+      onToggle={() =>
+        toggle.mutate({
+          id: k.id,
+          enable: k.status === 'disabled',
+        })
+      }
+      onReset={() => resetQuota.mutate(k.id)}
+      onDelete={() => setDelId(k.id)}
+    />
+  )
+
   return (
     <PageHeader
       title={VIEW_TITLES.keys}
@@ -211,48 +247,28 @@ export function KeysPage() {
             actionLabel='生成'
             onAction={() => setCreateOpen(true)}
           />
+        ) : isAdmin ? (
+          <div className='space-y-6'>
+            <KeyGroup
+              title='平台密钥'
+              hint='管理员密钥：可调度全部槽位（含已分配给租户的槽位），也可只放行指定账号池'
+              rows={platformKeys}
+              render={(rows) => rows.map((k) => keyRowNode(k))}
+            />
+            <KeyGroup
+              title='租户密钥'
+              hint='租户自助创建，只能访问分配给自己的槽位；管理员可编辑、停用、删除'
+              tone='tenant'
+              rows={tenantKeys}
+              render={(rows) => rows.map((k) => keyRowNode(k, ownerNameOf(k.user_id)))}
+            />
+          </div>
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>名称</TableHead>
-                <TableHead>Key</TableHead>
-                <TableHead>分类</TableHead>
-                <TableHead>状态</TableHead>
-                <TableHead>额度</TableHead>
-                <TableHead>限制</TableHead>
-                <TableHead>过期</TableHead>
-                <TableHead className='text-right'></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {keys.map((k) => (
-                <KeyRow
-                  key={k.id}
-                  item={k}
-                  busy={
-                    toggle.isPending ||
-                    resetQuota.isPending ||
-                    reveal.isPending ||
-                    rotate.isPending
-                  }
-                  onView={() => void viewPlain(k)}
-                  onCopy={() => void copyPlain(k)}
-                  onRotate={() => setRotateId(k.id)}
-                  onEdit={() => setEditId(k.id)}
-                  onStats={() => setStatsId(k.id)}
-                  onToggle={() =>
-                    toggle.mutate({
-                      id: k.id,
-                      enable: k.status === 'disabled',
-                    })
-                  }
-                  onReset={() => resetQuota.mutate(k.id)}
-                  onDelete={() => setDelId(k.id)}
-                />
-              ))}
-            </TableBody>
-          </Table>
+          <KeyGroup
+            title='我的密钥'
+            rows={platformKeys}
+            render={(rows) => rows.map((k) => keyRowNode(k))}
+          />
         )}
       </QueryGate>
       <KeyLimitsDialog
@@ -328,8 +344,65 @@ function draftName(payload: unknown): string | undefined {
   return undefined
 }
 
+function KeyGroup({
+  title,
+  hint,
+  rows,
+  tone,
+  render,
+}: {
+  title: string
+  hint?: string
+  rows: ApiKeyItem[]
+  tone?: 'tenant'
+  render: (rows: ApiKeyItem[]) => ReactNode
+}) {
+  return (
+    <section className='space-y-2'>
+      <header className='flex flex-wrap items-baseline gap-2'>
+        <h2
+          className={cn(
+            'text-sm font-medium',
+            tone === 'tenant' && 'text-amber-600 dark:text-amber-400'
+          )}
+        >
+          {title}
+          <span className='ml-1 text-xs font-normal text-muted-foreground'>
+            ({rows.length})
+          </span>
+        </h2>
+        {hint ? (
+          <span className='text-xs text-muted-foreground'>{hint}</span>
+        ) : null}
+      </header>
+      {rows.length ? (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>名称</TableHead>
+              <TableHead>Key</TableHead>
+              <TableHead>分类</TableHead>
+              <TableHead>状态</TableHead>
+              <TableHead>额度</TableHead>
+              <TableHead>限制</TableHead>
+              <TableHead>过期</TableHead>
+              <TableHead className='text-right'></TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>{render(rows)}</TableBody>
+        </Table>
+      ) : (
+        <p className='rounded-md border border-dashed px-3 py-6 text-center text-xs text-muted-foreground'>
+          暂无{title}
+        </p>
+      )}
+    </section>
+  )
+}
+
 function KeyRow({
   item,
+  ownerName,
   busy,
   onView,
   onCopy,
@@ -341,6 +414,7 @@ function KeyRow({
   onDelete,
 }: {
   item: ApiKeyItem
+  ownerName?: string
   busy: boolean
   onView: () => void
   onCopy: () => void
@@ -361,6 +435,14 @@ function KeyRow({
       <TableCell>
         <div className='font-medium'>{item.name || 'default'}</div>
         <div className='text-xs text-muted-foreground'>
+          {ownerName ? (
+            <>
+              <span className='text-amber-600 dark:text-amber-400'>
+                租户 · {ownerName}
+              </span>
+              {' · '}
+            </>
+          ) : null}
           {scopeText(item)}
           {' · '}
           {fmtNum(item.requests || 0)} 请求

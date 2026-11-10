@@ -176,6 +176,11 @@ export function VmActionsProvider({
               const vm = byId(assignId)
               if (vm) setOwner({ vm, user_id: userId })
             }}
+            onReclaim={() => {
+              const vm = byId(assignId)
+              setAssignId(null)
+              if (vm) setReclaimTarget(vm)
+            }}
           />
           <ConfirmDialog
             open={reclaimTarget != null}

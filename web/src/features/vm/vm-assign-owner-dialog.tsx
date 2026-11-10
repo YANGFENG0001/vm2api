@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import type { Vm } from '@/types/panel-vm'
+import { Undo2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -20,6 +21,7 @@ import {
 import { usersQueryOptions } from '@/features/users/queries'
 import {
   assignableUsers,
+  canReclaimVm,
   resolveOwnerUsername,
   vmOriginLabel,
 } from '@/features/vm/vm-owner'
@@ -30,12 +32,15 @@ export function VmAssignOwnerDialog({
   pending,
   onOpenChange,
   onConfirm,
+  onReclaim,
 }: {
   vm: Vm | null
   open: boolean
   pending?: boolean
   onOpenChange: (open: boolean) => void
   onConfirm: (userId: string) => void
+  /** 已有属主时提供收回入口：把槽位退回平台池。 */
+  onReclaim?: () => void
 }) {
   const users = useQuery({
     ...usersQueryOptions(),
@@ -43,6 +48,7 @@ export function VmAssignOwnerDialog({
   })
   const options = assignableUsers(users.data?.items)
   const [userId, setUserId] = useState('')
+  const reclaimable = !!onReclaim && !!vm && canReclaimVm(vm)
 
   useEffect(() => {
     if (!open || !vm) return
@@ -105,20 +111,34 @@ export function VmAssignOwnerDialog({
             </p>
           ) : null}
         </div>
-        <DialogFooter>
-          <Button
-            variant='outline'
-            onClick={() => onOpenChange(false)}
-            disabled={pending}
-          >
-            取消
-          </Button>
-          <Button
-            disabled={pending || !userId}
-            onClick={() => userId && onConfirm(userId)}
-          >
-            确认分配
-          </Button>
+        <DialogFooter className='sm:justify-between'>
+          <div>
+            {reclaimable ? (
+              <Button
+                variant='outline'
+                className='text-destructive'
+                onClick={onReclaim}
+                disabled={pending}
+              >
+                <Undo2 /> 收回进平台池
+              </Button>
+            ) : null}
+          </div>
+          <div className='flex gap-2'>
+            <Button
+              variant='outline'
+              onClick={() => onOpenChange(false)}
+              disabled={pending}
+            >
+              取消
+            </Button>
+            <Button
+              disabled={pending || !userId}
+              onClick={() => userId && onConfirm(userId)}
+            >
+              确认分配
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

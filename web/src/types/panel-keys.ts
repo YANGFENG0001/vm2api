@@ -3,6 +3,8 @@ import type { VmUsageStatsDay, VmUsageStatsRank } from '@/types/panel-vm'
 export type ApiKeyItem = {
   id: string
   name?: string
+  /** 非空 = 租户自助创建的密钥，作用域只能是该租户自己的槽位。 */
+  user_id?: string | null
   /** 旧字段别名。列表请用 `key_prefix` / `maskApiKeyItem()`。 */
   prefix?: string
   key_prefix?: string
