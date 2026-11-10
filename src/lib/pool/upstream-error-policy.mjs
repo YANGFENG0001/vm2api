@@ -20,6 +20,9 @@ const ENTITLEMENT_PATTERNS = [
   /fast (?:mode|request).*(?:credit|entitlement)/i,
 ]
 
+/** Upstream says this Fable request needs a Max seat — the account is not one. */
+const FABLE_MAX_ONLY_PATTERNS = [/requires an available max account/i, /fable[^.]{0,120}max account/i]
+
 const SIGNATURE_PATTERNS = [
   /signature/i,
   /expected[`\s].*thinking/i,
@@ -538,6 +541,21 @@ function classifyUpstreamResultRaw(
   if (status === 429) {
     if (ENTITLEMENT_PATTERNS.some((pattern) => pattern.test(message))) {
       return { scope: 'request', action: 'stop', reason: 'entitlement_required', cooldownUntil: null }
+    }
+    // 429 + "Fable requires an available Max account" is an entitlement, not a
+    // rate limit. Cooling it like a limit made the same non-Max slot retry every
+    // 60s forever — from the client that looked like "worked once, then always
+    // 429". Park the model on that account instead (same as the 403 branch), so
+    // the pool moves on or reports model_not_supported.
+    if (isFableModel(model) && FABLE_MAX_ONLY_PATTERNS.some((pattern) => pattern.test(message))) {
+      return {
+        scope: 'account',
+        action: 'continue',
+        reason: 'fable_plan_denied',
+        cooldownUntil: null,
+        retrySameAccount: false,
+        mark_tier: 'pro',
+      }
     }
     if (isUnifiedAccountLimit(result.headers)) {
       return {

@@ -63,12 +63,19 @@ export function ownerScopeFromRequest(req, usersRepo = null) {
   return ownerScopeFromApiKey(rec, { apiKeyKind: req?.apiKeyKind, ownerRole })
 }
 
+/**
+ * Platform scope reaches the whole fleet, assigned slots included.
+ *
+ * 租户分配 decides who *sees* a slot in the panel, not who may spend its
+ * capacity. Matching only unowned slots made every platform key 503 the moment
+ * the fleet was fully handed out to tenants ("号池当前没有可用账号"), and it
+ * broke the panel's own slot test for assigned slots. Tenant isolation is still
+ * enforced on the other branch: a `user` scope only matches its own slots.
+ */
 export function vmMatchesOwnerScope(vm, scope = PLATFORM_SCOPE) {
   const type = scope?.type || 'platform'
-  if (type === 'any') return true
-  const owner = vmOwnerId(vm)
-  if (type === 'platform') return !owner
-  if (type === 'user') return owner === normalizeOwnerId(scope.userId)
+  if (type === 'any' || type === 'platform') return true
+  if (type === 'user') return vmOwnerId(vm) === normalizeOwnerId(scope.userId)
   return false
 }
 

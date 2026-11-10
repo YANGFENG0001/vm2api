@@ -1537,7 +1537,7 @@ test('platform scope skips tenant-owned VMs', async (t) => {
   assert.equal(miss.ok, false)
 })
 
-test('deleting a tenant makes its assigned spare selectable while the primary quota is exhausted', async (t) => {
+test('assigned spare is selectable for platform traffic while the primary quota is exhausted', async (t) => {
   const root = project()
   const quota = new AccountQuota({ dataDir: path.join(root, 'data'), config: {} })
   let pool
@@ -1556,10 +1556,8 @@ test('deleting a tenant makes its assigned spare selectable while the primary qu
     'anthropic-ratelimit-unified-5h-reset': new Date(Date.now() + 3600_000).toISOString(),
   })
   pool = scheduler(root, { accountQuota: quota })
-  const exhausted = await pool.selectAndReserve({ model: 'claude-test', allowWait: false })
-  assert.equal(exhausted.ok, false)
-
-  assert.equal(users.remove(user.id), true)
+  // 平台作用域覆盖全队列表：account-1 配额耗尽后直接落到租户名下的 account-2。
+  // 租户隔离由 ownerScope=user 那一支保证，不靠「把已分配槽位排除出平台池」。
   const recovered = await pool.selectAndReserve({ model: 'claude-test', allowWait: false })
   assert.equal(recovered.ok, true)
   assert.equal(recovered.vmId, 'vm-02')

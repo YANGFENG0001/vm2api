@@ -29,7 +29,18 @@ test('user keys only match their VMs', () => {
   assert.equal(vmMatchesOwnerScope({ owner_user_id: 'u2' }, scope), false)
   assert.equal(vmMatchesOwnerScope({}, scope), false)
   assert.equal(vmMatchesOwnerScope({}, PLATFORM_SCOPE), true)
-  assert.equal(vmMatchesOwnerScope({ owner_user_id: 'u1' }, PLATFORM_SCOPE), false)
+  // 平台密钥能用已分配给租户的槽位；分配只决定面板可见性，不封锁容量。
+  assert.equal(vmMatchesOwnerScope({ owner_user_id: 'u1' }, PLATFORM_SCOPE), true)
+})
+
+test('platform scope reaches assigned slots so the pool never empties out', () => {
+  const fleet = [{ id: 'vm-01', owner_user_id: 'u1' }, { id: 'vm-02', owner_user_id: 'u2' }, { id: 'vm-03' }]
+  assert.equal(fleet.filter((vm) => vmMatchesOwnerScope(vm, PLATFORM_SCOPE)).length, 3)
+  const tenant = ownerScopeFromApiKey({ user_id: 'u1' }, { ownerRole: 'user' })
+  assert.deepEqual(
+    fleet.filter((vm) => vmMatchesOwnerScope(vm, tenant)).map((vm) => vm.id),
+    ['vm-01'],
+  )
 })
 
 test('panel list hides unowned VMs from user', () => {

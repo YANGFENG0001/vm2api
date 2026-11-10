@@ -732,6 +732,40 @@ test('fable 403 is plan denied and does not park the credential', () => {
   assert.equal(shouldContinue(policy), true)
 })
 
+test('429 requires-an-available-Max-account parks the model instead of cooling 60s', () => {
+  const now = 1_700_000_000_000
+  const policy = classifyUpstreamResult(
+    {
+      status: 429,
+      body: {
+        type: 'error',
+        error: { type: 'rate_limit_error', message: 'Fable requires an available Max account' },
+      },
+    },
+    { model: 'claude-fable-5-2', now },
+  )
+  assert.equal(policy.reason, 'fable_plan_denied')
+  assert.equal(policy.action, 'continue')
+  assert.equal(policy.mark_tier, 'pro')
+  assert.equal(policy.retrySameAccount, false)
+  assert.equal(policy.cooldownUntil, null)
+  assert.equal(shouldContinue(policy), true)
+})
+
+test('ordinary fable 429 still cools the fable family', () => {
+  const now = 1_700_000_000_000
+  const policy = classifyUpstreamResult(
+    {
+      status: 429,
+      body: { type: 'error', error: { type: 'rate_limit_error', message: 'rate limited' } },
+    },
+    { model: 'claude-fable-5-2', now },
+  )
+  assert.equal(policy.reason, 'fable_rate_limited')
+  assert.equal(policy.model, 'fable')
+  assert.equal(policy.cooldownUntil, now + 60_000)
+})
+
 test('non-fable 403 still cools the credential', () => {
   const now = 1_700_000_000_000
   const policy = classifyUpstreamResult(

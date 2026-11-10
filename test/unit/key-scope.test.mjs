@@ -113,8 +113,12 @@ test('slot admission applies the owner scope as well as the key scope', () => {
   assert.equal(vmAllowedForScopes(tenantVm, { ownerScope: tenant, keyScope: pooled }), true)
   assert.equal(vmAllowedForScopes(otherVm, { ownerScope: tenant, keyScope: pooled }), false)
 
-  // Platform keys keep the pool and never see tenant slots.
+  // Platform keys keep the pool scope and reach the whole fleet, tenant slots
+  // included — 分配只决定面板可见性，不封锁平台密钥的容量。
   const platform = { type: 'platform' }
   assert.equal(vmAllowedForScopes(platformVm, { ownerScope: platform, keyScope: globalKey }), true)
-  assert.equal(vmAllowedForScopes(tenantVm, { ownerScope: platform, keyScope: globalKey }), false)
+  assert.equal(vmAllowedForScopes(tenantVm, { ownerScope: platform, keyScope: globalKey }), true)
+  // Still bounded by the key's own pool: a platform key that named a pool only
+  // schedules that pool's members.
+  assert.equal(vmAllowedForScopes(otherVm, { ownerScope: platform, keyScope: pooled }), false)
 })
