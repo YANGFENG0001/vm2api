@@ -34,7 +34,7 @@ import { hardBlockOf } from './rate-limit-service.mjs'
 import { unitCircuit } from './unit-circuit.mjs'
 import { isSlotProxyDesynced, readWorkerProxyEndpoint, readWorkerEgressMode } from '../vm/vm-runtime.mjs'
 import { splitBlocksModel } from './weekly-split.mjs'
-import { slotAllowsModel } from './slot-model-gate.mjs'
+import { normalizeAllowedModels, resolveSlotTier, slotAllowsModel } from './slot-model-gate.mjs'
 import { isCodexVm } from '../vm/vm-kind.mjs'
 import { detectInboundPlatform } from '../protocol/platform-detect.mjs'
 import { resolveCredentialScheduleLevel } from './credential-weight.mjs'
@@ -188,7 +188,28 @@ function scopedSeatKey(seatKey, scope = PLATFORM_SCOPE) {
  * inside its operator rest window, whose open time rides along as retry_after.
  */
 function emptyPoolFailure(model, candidates, now = Date.now()) {
-  if (isFableModel(model)) return { reason: 'fable_requires_max', retry_after_ms: null }
+  const byReason = candidates?.rejections?.by_reason || {}
+  const gateMisses = Number(byReason.fable_requires_max) || 0
+  const otherMisses = Object.entries(byReason).filter(([reason]) => reason !== 'fable_requires_max')
+  // Fable keeps its Max gate, but only when that gate is what actually emptied
+  // the pool. A slot outside the allowlist, a slot in a weekly limit window, or
+  // an unschedulable slot used to be reported as "requires an available Max
+  // account" too, which hid the real cause from the caller.
+  if (isFableModel(model) && (gateMisses > 0 || otherMisses.length === 0)) {
+    return { reason: 'fable_requires_max', retry_after_ms: null }
+  }
+  // A model no remaining slot is allowed to serve is not capacity; name it.
+  const modelMisses = (Number(byReason.model_not_allowed) || 0) + (Number(byReason.model_not_supported) || 0)
+  const totalMisses = otherMisses.reduce((sum, [, count]) => sum + count, 0) || Number(gateMisses)
+  if (modelMisses > 0 && modelMisses >= totalMisses) {
+    return {
+      reason:
+        Number(byReason.model_not_supported) > Number(byReason.model_not_allowed)
+          ? 'model_not_supported'
+          : 'model_not_allowed',
+      retry_after_ms: null,
+    }
+  }
   if ((candidates?.rejections?.quota_guard_request_too_large || 0) > 0) {
     return { reason: 'quota_guard_request_too_large', retry_after_ms: null }
   }
@@ -215,6 +236,14 @@ function selectionSnapshot(candidates = [], available = [], extras = {}) {
     eligible: (candidates || []).length,
     available: (available || []).length,
     sticky_cleared: !!extras.stickyCleared,
+    ...(waitPool?.rejections?.dropped?.length
+      ? {
+          rejections: {
+            by_reason: waitPool.rejections.by_reason || {},
+            dropped: waitPool.rejections.dropped,
+          },
+        }
+      : {}),
   }
 }
 
@@ -872,21 +901,44 @@ export class PoolScheduler extends EventEmitter {
     // Accounts dropped by an upstream 429 / 529 cooldown; an empty pool reports
     // that cause (pool_rate_limited / pool_overload_cooldown) instead of 503.
     candidates.cooldowns = { rate_limited: null, overloaded: null }
-    candidates.rejections = { quota_guard_request_too_large: 0 }
+    // Per-reason drops. Without this a Fable request reported "requires an
+    // available Max account" no matter why the pool emptied — a slot outside
+    // the allowlist, a slot in a weekly rate-limit window, or a slot with no
+    // proxy all looked identical to the caller.
+    candidates.rejections = { quota_guard_request_too_large: 0, by_reason: {}, dropped: [] }
     // Soonest working-window open across resting slots; an all-rest pool
     // reports it as retry_after so the client can time the next attempt.
     candidates.rest_until = null
     const pin = pinVmId ? String(pinVmId).trim() : ''
+    const noteDrop = (vmId, reason, detail = null) => {
+      const byReason = candidates.rejections.by_reason
+      byReason[reason] = (byReason[reason] || 0) + 1
+      if (candidates.rejections.dropped.length < 12) {
+        candidates.rejections.dropped.push({ vm: vmId, reason, ...(detail || {}) })
+      }
+    }
     for (const summary of summaries) {
       if (signal?.aborted) throw makeAbortError()
       if (pin && summary.id !== pin) continue
       const vm = getVm(this.projectRoot, summary.id)
       if (!vm) continue
-      if (!pin && platformMismatch(model, vm)) continue
-      if (!vmMatchesOwnerScope(vm, ownerScope)) continue
-      if (!keyAllowsVm(keyScope, vm)) continue
+      if (!pin && platformMismatch(model, vm)) {
+        noteDrop(vm.id, 'platform_mismatch')
+        continue
+      }
+      if (!vmMatchesOwnerScope(vm, ownerScope)) {
+        noteDrop(vm.id, 'owner_scope')
+        continue
+      }
+      if (!keyAllowsVm(keyScope, vm)) {
+        noteDrop(vm.id, 'key_scope')
+        continue
+      }
       const accountId = accountIdOf(vm, this.projectRoot)
-      if (!accountId || excluded.has(accountId) || excluded.has(vm.id)) continue
+      if (!accountId || excluded.has(accountId) || excluded.has(vm.id)) {
+        noteDrop(vm.id, 'already_tried')
+        continue
+      }
       const state = this.runtimeRepo?.get?.(accountId) || null
       const eligibility = await this.checkEligibility({
         vm,
@@ -910,6 +962,10 @@ export class PoolScheduler extends EventEmitter {
           const until = Number(eligibility.until) || 0
           candidates.rest_until = candidates.rest_until == null ? until : Math.min(candidates.rest_until, until)
         }
+        noteDrop(vm.id, kind, {
+          ...(eligibility.detail || {}),
+          ...(Number(eligibility.until) > 0 ? { until: new Date(Number(eligibility.until)).toISOString() } : {}),
+        })
         continue
       }
       const maxConcurrency = this.effectiveMaxConcurrency(
@@ -985,7 +1041,20 @@ export class PoolScheduler extends EventEmitter {
         account = this.accountQuota?.repo?.get?.(accountId) || null
       } catch {}
       const modelGate = slotAllowsModel({ vm, account, model })
-      if (!modelGate.ok) return modelGate
+      if (!modelGate.ok) {
+        // Carry the evidence for the drop so the caller can see which slot said
+        // what instead of a single synthesized message.
+        return {
+          ...modelGate,
+          detail: {
+            model: String(model || ''),
+            ...(modelGate.reason === 'fable_requires_max' ? { tier: resolveSlotTier(vm, account) } : {}),
+            ...(modelGate.reason === 'model_not_allowed'
+              ? { allowed_models: normalizeAllowedModels(vm?.policy?.allowed_models ?? vm?.allowed_models ?? null) }
+              : {}),
+          },
+        }
+      }
       if (account) {
         this.syncQuotaSchedule(vm, account)
         if (this.projectRoot) {

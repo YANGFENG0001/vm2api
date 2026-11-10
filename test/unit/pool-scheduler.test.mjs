@@ -2815,3 +2815,42 @@ test('a resting slot that cannot serve the model does not promise a Retry-After'
   assert.equal(selected.ok, false)
   assert.equal(selected.retry_after_ms, null)
 })
+
+test('a Fable allowlist miss names the allowlist instead of the Max gate', async (t) => {
+  const root = project()
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  for (const id of ['vm-01', 'vm-02']) writeTier(root, id, 'max', { allowed_models: ['claude-fable-5-1'] })
+  const selected = await scheduler(root).selectAndReserve({
+    model: 'claude-fable-5-2',
+    allowWait: false,
+  })
+  assert.equal(selected.ok, false)
+  assert.equal(selected.reason, 'model_not_allowed')
+  assert.equal(selected.rejections.by_reason.model_not_allowed, 2)
+  assert.equal(selected.rejections.dropped[0].allowed_models.includes('claude-fable-5-2'), false)
+})
+
+test('a Fable weekly-limit window reports rate_limit, not the Max gate', async (t) => {
+  const root = project()
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const runtimeRepo = new RuntimeRepo()
+  for (const [id, account] of [
+    ['vm-01', 'account-1'],
+    ['vm-02', 'account-2'],
+  ]) {
+    runtimeRepo.upsert({
+      account_id: account,
+      vm_id: id,
+      status: 'cooldown',
+      rate_limit_reset_at: Date.now() + 3600_000,
+    })
+  }
+  const selected = await scheduler(root, { runtimeRepo }).selectAndReserve({
+    model: 'claude-fable-5-2',
+    allowWait: false,
+  })
+  assert.equal(selected.ok, false)
+  assert.equal(selected.reason, 'pool_rate_limited')
+  assert.equal(selected.rejections.by_reason.rate_limited, 2)
+  assert.ok(selected.retry_after_ms > 0)
+})

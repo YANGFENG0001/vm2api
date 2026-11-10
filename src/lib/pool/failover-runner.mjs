@@ -186,6 +186,33 @@ function quotaGuardTooLargeError(details = {}) {
   }
 }
 
+/**
+ * The model itself is not servable by any remaining slot: the slot allowlist
+ * never listed it, or the account was recently told the model is unsupported.
+ * That is a request/scope problem, not capacity — say so instead of a 503.
+ */
+function poolModelNotAllowedError(reason, details = {}) {
+  const dropped = Array.isArray(details.rejections?.dropped) ? details.rejections.dropped : []
+  const mine = dropped.filter((item) => item.reason === reason)
+  const slots = [...new Set(mine.map((item) => item.vm).filter(Boolean))]
+  const model = mine.find((item) => item.model)?.model || ''
+  const scope = slots.length ? `（${slots.join('、')}）` : ''
+  const message =
+    reason === 'model_not_supported'
+      ? `没有槽位可以服务该模型${scope}：账号近期被上游判定不支持该模型，等待冷却结束后重试，或换一个账号。`
+      : `没有槽位允许该模型${scope}：请在该槽位的「可用模型」里勾选${model ? ` ${model}` : '该模型'}，或清空白名单。`
+  return {
+    ok: false,
+    status: 400,
+    via: 'pool-failover',
+    terminalState: 'exhausted',
+    body: {
+      type: 'error',
+      error: { type: 'invalid_request_error', code: reason, message, details },
+    },
+  }
+}
+
 function selectedHasRefresh(selected) {
   if (selected?.hasRefresh === true || selected?.hasRefresh === false) return selected.hasRefresh
   const cred = selected?.workerStatus?.credential || selected?.state?.worker_status?.credential || {}
@@ -400,10 +427,14 @@ function selectionFailure(selected, { excluded, lastPolicy, lastResult, hops }) 
     attempt_count: hops,
     last_reason: lastPolicy?.reason || null,
     last_status: lastResult?.status ?? null,
+    ...(selected?.rejections ? { rejections: selected.rejections } : {}),
   }
   if (CAPACITY_SELECTION_REASONS.has(reason)) return poolOverloadedError(details)
   if (reason === 'pool_rate_limited') return poolRateLimitedError(details)
   if (reason === 'quota_guard_request_too_large') return quotaGuardTooLargeError(details)
+  if (reason === 'model_not_allowed' || reason === 'model_not_supported') {
+    return poolModelNotAllowedError(reason, details)
+  }
   const failed = poolError('account_pool_exhausted', 'No eligible Claude accounts remain', details)
   // An all-rest pool knows when the first working window opens.
   const retryMs = Number(details.retry_after_ms)
@@ -773,6 +804,7 @@ export class FailoverRunner {
             eligible: selected?.eligible ?? 0,
             available: selected?.available ?? 0,
             attempt_count: budget.hops,
+            ...(selected?.rejections ? { rejections: selected.rejections } : {}),
           }),
           ...attribution(),
         }

@@ -1764,3 +1764,42 @@ test('an all-rest pool 503 carries Retry-After for the next window open', async 
   assert.equal(result.body.error.code, 'account_pool_exhausted')
   assert.equal(result.retryAfterSec, 91)
 })
+
+test('a model outside every slot allowlist is a 400 naming the slot', async () => {
+  const scheduler = {
+    async selectAndReserve() {
+      return {
+        ok: false,
+        reason: 'model_not_allowed',
+        waitMs: 0,
+        eligible: 0,
+        available: 0,
+        rejections: {
+          by_reason: { model_not_allowed: 1 },
+          dropped: [
+            {
+              vm: 'vm-02',
+              reason: 'model_not_allowed',
+              model: 'claude-fable-5-2',
+              allowed_models: ['claude-fable-5-1'],
+            },
+          ],
+        },
+      }
+    },
+    markCooldown() {},
+    markSuccess() {},
+  }
+  const runner = new FailoverRunner({ scheduler })
+  const result = await runner.run({
+    requestId: 'req-fable-allowlist',
+    canonicalBody: { model: 'claude-fable-5-2' },
+    model: 'claude-fable-5-2',
+    callAttempt: () => success(),
+  })
+  assert.equal(result.status, 400)
+  assert.equal(result.body.error.type, 'invalid_request_error')
+  assert.equal(result.body.error.code, 'model_not_allowed')
+  assert.match(result.body.error.message, /vm-02/)
+  assert.deepEqual(result.body.error.details.rejections.dropped[0].allowed_models, ['claude-fable-5-1'])
+})
