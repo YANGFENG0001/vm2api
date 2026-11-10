@@ -25,7 +25,23 @@ describe('API key limit payload', () => {
       expires_in_days: 30,
       group_type: 'anthropic',
       allowed_vms: ['vm-01'],
+      user_id: '',
     })
+  })
+
+  it('names the owner: empty string is a platform key, an id is a tenant key', () => {
+    expect(keyLimitsPayload(draft, 'create', { isAdmin: true }).user_id).toBe(
+      ''
+    )
+    expect(
+      keyLimitsPayload({ ...draft, owner_user_id: ' user-1 ' }, 'create', {
+        isAdmin: true,
+      }).user_id
+    ).toBe('user-1')
+    // Tenants never choose an owner: the server pins it to themselves.
+    expect(
+      keyLimitsPayload(draft, 'create', { isAdmin: false })
+    ).not.toHaveProperty('user_id')
   })
 
   it('omits create-only fields from edits and rejects invalid quotas', () => {

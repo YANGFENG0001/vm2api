@@ -875,6 +875,23 @@ export function createPanelHandler(ctx) {
     return normalized
   }
 
+  /**
+   * Who owns a new key. A tenant may only ever own its own keys. An admin
+   * creates a platform key (user_id null) unless it names a tenant explicitly:
+   * platform keys are the ones that schedule the whole slot list, and until now
+   * there was no way to create one — every admin-created key silently inherited
+   * the admin's own id and landed under 租户密钥.
+   */
+  function resolveKeyOwnerId(body = {}, req) {
+    const ident = panelIdentity(req)
+    if (ident.role !== 'admin') return req.panelUserId || null
+    if (!Object.prototype.hasOwnProperty.call(body || {}, 'user_id')) return null
+    // '' and null both mean "platform key". A named owner is stored as given —
+    // the panel picks it from the user list, and a dangling id is not a new
+    // failure mode (the key then simply fails _ownerActive, same as before).
+    return String(body.user_id ?? '').trim() || null
+  }
+
   /** Slots a key may be scoped to; a tenant's foreign slots read as missing. */
   function keyScopeVms(req) {
     const ident = panelIdentity(req)
@@ -1608,8 +1625,7 @@ export function createPanelHandler(ctx) {
             name: body?.name,
             key: body?.key || body?.custom_key || undefined,
             category: body?.category,
-            user_id:
-              panelIdentity(req).role === 'user' ? req.panelUserId || null : body?.user_id || req.panelUserId || null,
+            user_id: resolveKeyOwnerId(body, req),
             group_id: input.group_id,
             group_type: scope.group_type,
             allowed_vms: scope.allowed_vms,
@@ -1655,6 +1671,10 @@ export function createPanelHandler(ctx) {
         try {
           const input = normalizePanelApiKeyInput(body || {}, req)
           const currentRec = apiKeyStore.getById(id)
+          // Re-home an existing key: '' promotes it back to a platform key.
+          if (ident.role === 'admin' && Object.prototype.hasOwnProperty.call(body || {}, 'user_id')) {
+            input.user_id = resolveKeyOwnerId(body, req)
+          }
           const scopeInput = { group_type: body?.group_type, allowed_vms: body?.allowed_vms }
           if (ident.role === 'admin' && Object.prototype.hasOwnProperty.call(body || {}, 'vm_pool_id')) {
             scopeInput.vm_pool_id = body.vm_pool_id

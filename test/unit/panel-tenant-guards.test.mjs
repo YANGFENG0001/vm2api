@@ -438,3 +438,29 @@ test('tenant test-models: own slot lists models, foreign slot 404s, refresh neve
   assert.equal(admin.status, 200)
   assert.ok(dials > 0, 'admin refresh still goes live')
 })
+
+test('admin keys are platform keys unless the body names a tenant', async (t) => {
+  const { root, store } = keyFixture(t)
+  const platform = await makeHandler(root, ADMIN, { name: 'ops' }, { apiKeyStore: store }).call(
+    'POST',
+    '/api/panel/api-keys',
+  )
+  assert.equal(platform.status, 201, JSON.stringify(platform.body))
+  // No user_id: the one kind of key that schedules the whole slot list.
+  assert.equal(store.getById(platform.body.item.id).user_id, null)
+
+  const tenant = await makeHandler(root, ADMIN, { name: 'for-u2', user_id: 'u-2' }, { apiKeyStore: store }).call(
+    'POST',
+    '/api/panel/api-keys',
+  )
+  assert.equal(tenant.status, 201, JSON.stringify(tenant.body))
+  assert.equal(store.getById(tenant.body.item.id).user_id, 'u-2')
+
+  // '' promotes a tenant key back to a platform key.
+  const promoted = await makeHandler(root, ADMIN, { user_id: '' }, { apiKeyStore: store }).call(
+    'PATCH',
+    `/api/panel/api-keys/${tenant.body.item.id}`,
+  )
+  assert.equal(promoted.status, 200, JSON.stringify(promoted.body))
+  assert.equal(store.getById(tenant.body.item.id).user_id, null)
+})

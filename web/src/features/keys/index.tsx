@@ -61,18 +61,31 @@ export function KeysPage() {
   // 混在平台密钥里既看不出归属，也容易误改成平台作用域。
   const users = useQuery({
     ...usersQueryOptions(),
-    enabled: isAdmin && keys.some((k) => k.user_id),
+    // The create dialog needs the full list to offer 归属, not just the owners
+    // that already have a key.
+    enabled: isAdmin,
   })
   const ownerNameOf = (id?: string | null) => {
     const key = String(id || '').trim()
     if (!key) return ''
     return users.data?.items?.find((u) => u.id === key)?.username || key
   }
+  // 归属按「拥有者的角色」判，不只按 user_id 是否为空：ownerScopeFromApiKey 把
+  // 管理员名下的密钥同样当作平台作用域，所以这类密钥必须留在平台区，否则面板
+  // 会把它标成租户密钥、看起来像作用域被降级了。
+  const adminOwnerIds = new Set(
+    (users.data?.items || [])
+      .filter((u) => u.role === 'admin' || u.role === 'super')
+      .map((u) => u.id)
+  )
   const tenantKeys = isAdmin
-    ? keys.filter((k) => !!String(k.user_id || '').trim())
+    ? keys.filter((k) => {
+        const owner = String(k.user_id || '').trim()
+        return !!owner && !adminOwnerIds.has(owner)
+      })
     : []
   const platformKeys = isAdmin
-    ? keys.filter((k) => !String(k.user_id || '').trim())
+    ? keys.filter((k) => !tenantKeys.includes(k))
     : keys
   const editing = keys.find((k) => k.id === editId) || null
   const rotating = keys.find((k) => k.id === rotateId) || null
@@ -261,7 +274,7 @@ export function KeysPage() {
           <div className='space-y-6'>
             <KeyGroup
               title='平台密钥'
-              hint='管理员密钥：可调度全部槽位（含已分配给租户的槽位），也可只放行指定账号池'
+              hint='不绑定租户：可调度全部槽位（含已分配给租户的槽位），也可只放行指定账号池。管理员名下的密钥按平台权限调度，也列在这里'
               rows={platformKeys}
               render={(rows) => rows.map((k) => keyRowNode(k))}
             />
@@ -290,6 +303,7 @@ export function KeysPage() {
         pending={create.isPending}
         vms={vmItems}
         pools={isAdmin ? pools.data?.pools || [] : undefined}
+        users={isAdmin ? users.data?.items || [] : undefined}
         onSubmit={(draft) => create.mutate(draft)}
       />
       <KeyLimitsDialog
@@ -301,6 +315,7 @@ export function KeysPage() {
         initial={editing}
         vms={vmItems}
         pools={isAdmin ? pools.data?.pools || [] : undefined}
+        users={isAdmin ? users.data?.items || [] : undefined}
         pending={edit.isPending}
         onSubmit={(draft) => {
           if (!editId) return

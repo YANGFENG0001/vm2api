@@ -279,7 +279,9 @@ export class ApiKeyStore {
     if (patch.rate_limit_1d != null) rec.rate_limit_1d = Math.max(0, Number(patch.rate_limit_1d) || 0)
     if (patch.rate_limit_7d != null) rec.rate_limit_7d = Math.max(0, Number(patch.rate_limit_7d) || 0)
     if (patch.group_id != null) rec.group_id = Number(patch.group_id) || 1
-    if (patch.user_id != null) rec.user_id = patch.user_id
+    // null is meaningful here: it promotes a tenant key back to a platform key.
+    if (Object.prototype.hasOwnProperty.call(patch, 'user_id'))
+      rec.user_id = patch.user_id ? String(patch.user_id) : null
     if (patch.rpm != null) rec.rpm = clampInt(patch.rpm, 0, 1e6, rec.rpm)
     if (patch.expires_at === null) rec.expires_at = null
     else if (patch.expires_at != null) {

@@ -11,6 +11,8 @@ export type KeyLimitsDraft = {
   group_type: KeyGroupType
   allowed_vms: string[]
   vm_pool_id?: string
+  /** '' = 平台密钥（可调度全部槽位）；非空 = 绑定到该租户，只能用自己的槽。 */
+  owner_user_id?: string
 }
 
 function nonNegative(value: number, label: string): number {
@@ -63,5 +65,8 @@ export function keyLimitsPayload(
     const days = nonNegative(draft.expires_in_days, '有效期')
     if (days > 0) body.expires_in_days = days
   }
+  // Always send it for admins, including the empty string: that is how a key is
+  // created as (or promoted back to) a platform key.
+  if (isAdmin) body.user_id = String(draft.owner_user_id || '').trim()
   return body
 }

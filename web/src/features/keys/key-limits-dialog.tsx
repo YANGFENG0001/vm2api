@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import type { ApiKeyItem, VmPool } from '@/types/panel-keys'
+import type { PanelUser } from '@/types/panel-users'
 import type { Vm } from '@/types/panel-vm'
 import { isCodexVm } from '@/lib/vm-kind'
 import { Button } from '@/components/ui/button'
@@ -27,6 +28,8 @@ const QUOTA_EDIT = [0, 1000, 5000, 10000, 50000, 100000]
 const RPM_CREATE = [0, 30, 60, 120, 600]
 const RPM_EDIT = [0, 30, 60, 120, 300, 600]
 const DAYS = [0, 7, 30, 90, 365]
+/** Radix Select forbids an empty item value; '' still means "platform key" in the draft. */
+const PLATFORM_OWNER = '__platform__'
 
 export type { KeyLimitsDraft } from './key-payload'
 
@@ -94,6 +97,7 @@ export function KeyLimitsDialog({
   onSubmit,
   vms = [],
   pools,
+  users,
 }: {
   mode: 'create' | 'edit'
   open: boolean
@@ -103,6 +107,8 @@ export function KeyLimitsDialog({
   onSubmit: (draft: KeyLimitsDraft) => void
   vms?: Vm[]
   pools?: VmPool[]
+  /** Provided for admins only: it unlocks the 归属 picker (platform vs tenant). */
+  users?: PanelUser[]
 }) {
   const [draft, setDraft] = useState<KeyLimitsDraft>(blankDraft())
 
@@ -123,6 +129,7 @@ export function KeyLimitsDialog({
         allowed_vms:
           group === 'all' || group === 'pool' ? [] : initial.allowed_vms || [],
         ...(pools ? { vm_pool_id: initial.vm_pool_id || '' } : {}),
+        owner_user_id: String(initial.user_id || ''),
       })
       return
     }
@@ -133,6 +140,20 @@ export function KeyLimitsDialog({
   const quotaOpts = mode === 'edit' ? QUOTA_EDIT : QUOTA_CREATE
   const rpmOpts = mode === 'edit' ? RPM_EDIT : RPM_CREATE
   const listed = vmsInGroup(vms || [], draft.group_type)
+  // 只有普通租户能当「租户密钥」的归属：ownerScopeFromApiKey 把 admin/super 名下的
+  // 密钥按平台作用域处理，这里也必须显示成平台密钥，否则同一把 key 会在列表里归平台、
+  // 在编辑框里归租户。
+  const ownerOptions = (users || []).filter(
+    (u) => u.role !== 'admin' && u.role !== 'super'
+  )
+  const currentOwner = ownerOptions.some((u) => u.id === draft.owner_user_id)
+    ? String(draft.owner_user_id)
+    : ''
+  const orphanOwner =
+    draft.owner_user_id &&
+    !(users || []).some((u) => u.id === draft.owner_user_id)
+      ? String(draft.owner_user_id)
+      : ''
   const scopeBlocked =
     draft.group_type === 'pool'
       ? !draft.vm_pool_id
@@ -166,6 +187,43 @@ export function KeyLimitsDialog({
                   setDraft((d) => ({ ...d, name: e.target.value }))
                 }
               />
+            </Field>
+          ) : null}
+          {ownerOptions.length ? (
+            <Field label='归属'>
+              <Select
+                value={currentOwner || orphanOwner || PLATFORM_OWNER}
+                onValueChange={(v) =>
+                  setDraft((d) => ({
+                    ...d,
+                    owner_user_id: v === PLATFORM_OWNER ? '' : v,
+                  }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={PLATFORM_OWNER}>平台密钥</SelectItem>
+                  {ownerOptions.map((u) => (
+                    <SelectItem key={u.id} value={u.id}>
+                      租户 · {u.username}
+                    </SelectItem>
+                  ))}
+                  {/* Editing a key whose owner is gone: keep its id visible so the
+                      picker never looks like it silently dropped the tenant. */}
+                  {orphanOwner ? (
+                    <SelectItem value={orphanOwner}>
+                      租户 · {orphanOwner}（已删除）
+                    </SelectItem>
+                  ) : null}
+                </SelectContent>
+              </Select>
+              <p className='text-xs text-muted-foreground'>
+                {currentOwner
+                  ? '租户密钥：只能调度分配给该租户的槽位。'
+                  : '平台密钥：可调度全部槽位，也能只放行一个账号池。'}
+              </p>
             </Field>
           ) : null}
           <Field label='分类'>
@@ -369,6 +427,7 @@ function blankDraft(): KeyLimitsDraft {
     expires_in_days: 30,
     group_type: 'all',
     allowed_vms: [],
+    owner_user_id: '',
   }
 }
 
