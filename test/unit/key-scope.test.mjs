@@ -7,6 +7,8 @@ import {
   keyScopeFromRecord,
   keyScopeFromRequest,
   normalizeKeyScope,
+  resolveBackendForScope,
+  vmAllowedForScopes,
   vmPoolDenial,
 } from '../../src/lib/admin/key-scope.mjs'
 
@@ -76,4 +78,43 @@ test('a named pool is the only schedule set and a dead pool does not widen', () 
   )
   assert.equal(replaced.vm_pool_id, null)
   assert.deepEqual(replaced.allowed_vms, ['vm-01'])
+})
+
+test('a slot-scoped key never runs on the API-direct backend', () => {
+  // api-kernel picks endpoints and bypasses poolScheduler: keeping "api" for a
+  // key that named a pool or a platform allowlist silently widens it to the
+  // whole platform.
+  const pool = keyScopeFromRecord({ group_type: 'all', vm_pool_id: 'pool_abcd1234' })
+  assert.equal(resolveBackendForScope('api', pool), 'slot')
+  const listed = keyScopeFromRecord({ group_type: 'anthropic', allowed_vms: ['vm-01'] })
+  assert.equal(resolveBackendForScope('api', listed), 'slot')
+  const global = keyScopeFromRecord({ group_type: 'all' })
+  assert.equal(resolveBackendForScope('api', global), 'api')
+  assert.equal(resolveBackendForScope('slot', pool), 'slot')
+  assert.equal(resolveBackendForScope('api', null), 'api')
+})
+
+test('slot admission applies the owner scope as well as the key scope', () => {
+  const platformVm = { id: 'vm-01', platform: 'anthropic', owner_user_id: null }
+  const tenantVm = { id: 'vm-02', platform: 'anthropic', owner_user_id: 'u1' }
+  const otherVm = { id: 'vm-03', platform: 'anthropic', owner_user_id: 'u2' }
+  const globalKey = keyScopeFromRecord({ group_type: 'all' })
+
+  const tenant = { type: 'user', userId: 'u1' }
+  assert.equal(vmAllowedForScopes(tenantVm, { ownerScope: tenant, keyScope: globalKey }), true)
+  assert.equal(vmAllowedForScopes(platformVm, { ownerScope: tenant, keyScope: globalKey }), false)
+  assert.equal(vmAllowedForScopes(otherVm, { ownerScope: tenant, keyScope: globalKey }), false)
+
+  // A pool narrows further: membership still has to contain the slot.
+  const pooled = applyVmPool(keyScopeFromRecord({ vm_pool_id: 'pool_abcd1234' }), () => ({
+    enabled: true,
+    vm_ids: ['vm-02'],
+  }))
+  assert.equal(vmAllowedForScopes(tenantVm, { ownerScope: tenant, keyScope: pooled }), true)
+  assert.equal(vmAllowedForScopes(otherVm, { ownerScope: tenant, keyScope: pooled }), false)
+
+  // Platform keys keep the pool and never see tenant slots.
+  const platform = { type: 'platform' }
+  assert.equal(vmAllowedForScopes(platformVm, { ownerScope: platform, keyScope: globalKey }), true)
+  assert.equal(vmAllowedForScopes(tenantVm, { ownerScope: platform, keyScope: globalKey }), false)
 })

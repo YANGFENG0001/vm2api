@@ -7,6 +7,7 @@
 import { isDbOpen, getDb } from '../db/database.mjs'
 import { VmPoolsRepo } from '../db/repos/vm-pools-repo.mjs'
 import { isCodexVm } from '../vm/vm-kind.mjs'
+import { vmMatchesOwnerScope } from './resource-owner.mjs'
 
 const POOL_DENIAL = {
   missing: '账号池不存在',
@@ -106,6 +107,27 @@ export function vmPoolDenial(scope) {
     code: 'vm_pool_unavailable',
     message: POOL_DENIAL[scope.vm_pool_error] || '账号池不可用',
   }
+}
+
+/**
+ * API-direct endpoints pick between endpoints and never touch the slot
+ * scheduler, so a key bound to slots must be served by the slot path instead.
+ * Unscoped keys keep the backend they were configured with.
+ */
+export function resolveBackendForScope(backend, scope) {
+  if (backend !== 'api') return backend
+  const slotScoped = !!scope?.vm_pool_id || (!!scope?.group_type && scope.group_type !== 'all')
+  return slotScoped ? 'slot' : 'api'
+}
+
+/**
+ * Slot admission needs both gates: who owns the VM (租户分配) and what the key
+ * is allowed to schedule (platform list / 账号池). Applying only the key scope
+ * let a tenant key with group_type=all land on platform or another tenant's
+ * GPT slot.
+ */
+export function vmAllowedForScopes(vm, { ownerScope = null, keyScope = null } = {}) {
+  return vmMatchesOwnerScope(vm, ownerScope) && keyAllowsVm(keyScope, vm)
 }
 
 export function keyAllowsVm(scope, vm) {

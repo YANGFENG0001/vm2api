@@ -35,7 +35,7 @@ import { queryClaudeResetCredits, redeemClaudeResetCredit } from '../oauth/claud
 import { canOfficialUsage, credentialModeOfVm, isSetupTokenMode } from '../oauth/credential-mode.mjs'
 import { getUsageCache } from '../oauth/usage-cache.mjs'
 import { makeError, ErrorType, ErrorCode } from '../core/errors.mjs'
-import { filterVmsForPanel } from './resource-owner.mjs'
+import { filterVmsForPanel, vmOriginOf } from './resource-owner.mjs'
 import { computeWeeklySplit, publicWeeklySplit, weeklySplitConfig } from '../pool/weekly-split.mjs'
 import { proxyBlockedReason } from '../vm/proxy-policy.mjs'
 import { socksProxyFamily, normalizeSocksHost } from '../vm/socks-address.mjs'
@@ -1886,6 +1886,11 @@ function enrichVm(v, accountQuota, active, extras = {}) {
   return {
     id: v.id,
     name: v.name,
+    // Tenant ownership is part of the list contract: the panel renders
+    // "平台池（未分配）" from these two fields alone, so omitting them made
+    // every assigned slot look unassigned even though the tenant saw it.
+    owner_user_id: v.owner_user_id || null,
+    origin: vmOriginOf(v),
     status: v.status,
     active: v.id === active,
     kernel: v.kernel || null,

@@ -58,7 +58,7 @@ import { classifyClaudeRequestPurpose, prepareClassifierBody, classifierRequestS
 import { summarizeBody, redactHeaders, presentedApiKeyForLog } from '../admin/request-log.mjs'
 import { reasoningEffortOf, sessionIdForLog } from './log-fields.mjs'
 import { ownerScopeFromRequest } from '../admin/resource-owner.mjs'
-import { keyScopeFromRequest, vmPoolDenial } from '../admin/key-scope.mjs'
+import { keyScopeFromRequest, resolveBackendForScope, vmPoolDenial } from '../admin/key-scope.mjs'
 import {
   resolveInferenceEngine,
   resolveOfficialCcInference,
@@ -636,7 +636,7 @@ export function createHandleProtocol(deps) {
       logBag.error_message = errorResult.body?.error?.message || null
       return json(res, errorResult.status, errorResult.body)
     }
-    const inferenceBackend = resolveInferenceBackend(req)
+    let inferenceBackend = resolveInferenceBackend(req)
     let want1m = hasClaudeCode1mSuffix(inbound?.model) || hasClaudeCode1mSuffix(ctx.body?.model)
     const modelRewrite = applyCodexInboundModelRewrite(ctx.body, getRouting() || {})
     if (!modelRewrite.ok) {
@@ -696,6 +696,11 @@ export function createHandleProtocol(deps) {
       logBag.error_message = errorResult.body?.error?.message || null
       return json(res, 403, errorResult.body)
     }
+    // A key bound to slots (账号池 or an explicit platform allowlist) must be
+    // served inside that scope. The api-kernel hop picks between API endpoints
+    // and never touches poolScheduler, so keeping it would silently drop the
+    // pool and answer from the whole platform.
+    inferenceBackend = resolveBackendForScope(inferenceBackend, keyScope)
     // Codex returns before conversion. Distill does not apply to OpenAI platform models; the rest
     // of the gate scans them only when jev.openai_platform_enabled is on.
     if (
@@ -771,6 +776,7 @@ export function createHandleProtocol(deps) {
           projectRoot: cfg.paths.project,
           captureOutbound: logCtx.capture_outbound === true,
           accountGate,
+          ownerScope: ownerScopeFromRequest(req, apiKeyStore?.users),
           ops: deps.codexOps || {},
           ...codexSticky,
         })
@@ -789,6 +795,7 @@ export function createHandleProtocol(deps) {
         projectRoot: cfg.paths.project,
         captureOutbound: logCtx.capture_outbound === true,
         accountGate,
+        ownerScope: ownerScopeFromRequest(req, apiKeyStore?.users),
         ops: deps.codexOps || {},
         ...codexSticky,
       })
@@ -1012,6 +1019,20 @@ export function createHandleProtocol(deps) {
       })
     }
     if (inferenceBackend === 'api') {
+      // Direct endpoints spend the platform's upstream quota without touching
+      // slots, so a tenant key could use one to escape its slot scope.
+      if (ownerScopeFromRequest(req, apiKeyStore?.users).type !== 'platform') {
+        stats.errors++
+        const errorResult = makeError({
+          type: ErrorType.PERMISSION,
+          code: ErrorCode.API_BACKEND_FORBIDDEN,
+          message: '租户密钥只能调用自己名下的槽位',
+          status: 403,
+        })
+        logBag.error_code = ErrorCode.API_BACKEND_FORBIDDEN
+        logBag.error_message = errorResult.body?.error?.message || null
+        return json(res, 403, errorResult.body)
+      }
       const managedKey = req.apiKeyRecord || null
       if (managedKey) {
         const gate = apiKeyStore.acquire(managedKey)
@@ -1753,6 +1774,7 @@ export function createHandleProtocol(deps) {
       routing: getRouting() || {},
       projectRoot: cfg.paths.project,
       stickyRouter,
+      ownerScope: ownerScopeFromRequest(req, apiKeyStore?.users),
     })
   }
 
