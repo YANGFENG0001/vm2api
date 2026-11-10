@@ -320,7 +320,9 @@ test('the images route picks slots by the key owner role, like search', async ()
     res.finish()
     return rows[0]
   }
-  assert.equal((await run('a1')).vm_id, 'vm-platform')
+  // 平台密钥在本 fork 可调度全部槽位（含已分配给租户的），所以只断言它能拿到
+  // 槽位、不落到空池；租户仍必须落在自己的槽位上。
+  assert.ok(['vm-platform', 'vm-tenant'].includes((await run('a1')).vm_id))
   assert.equal((await run('u1')).vm_id, 'vm-tenant')
 })
 

@@ -117,8 +117,10 @@ test('GPT candidates follow the caller owner scope', () => {
     assert.deepEqual(tenant.ids, ['vm-gpt-mine'])
     const session = pickCodexCandidates(root, { headers: {}, panelUser: 'alice', panelRole: 'user', panelUserId: 'u1' })
     assert.deepEqual(session.ids, ['vm-gpt-mine'])
+    // 平台作用域在本 fork 覆盖全部槽位（分配只决定面板可见性，否则把所有
+    // 槽位分给租户后平台密钥直接 503）；租户仍然只看得到自己的槽位。
     const platform = pickCodexCandidates(root, { headers: {}, apiKeyKind: 'master' })
-    assert.deepEqual(platform.ids, ['vm-gpt-platform'])
+    assert.deepEqual([...platform.ids].sort(), ['vm-gpt-mine', 'vm-gpt-other', 'vm-gpt-platform'])
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }
