@@ -1224,7 +1224,7 @@ function writeTier(root, id, tier, extras = {}) {
   fs.writeFileSync(file, JSON.stringify(vm))
 }
 
-test('fable skips pro and unknown, lands on max', async (t) => {
+test('fable is not skipped when a pro slot is in the pool', async (t) => {
   const root = project()
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
   writeTier(root, 'vm-01', 'pro')
@@ -1232,7 +1232,7 @@ test('fable skips pro and unknown, lands on max', async (t) => {
   const pool = scheduler(root)
   const selected = await pool.selectAndReserve({ model: 'claude-fable-5', allowWait: false })
   assert.equal(selected.ok, true)
-  assert.equal(selected.vmId, 'vm-02')
+  assert.ok(['vm-01', 'vm-02'].includes(selected.vmId))
   selected.release()
 })
 
@@ -1260,17 +1260,19 @@ test('fable skips a Max account recently denied that model', async (t) => {
   selected.release()
 })
 
-test('fable with only pro slots returns fable_requires_max', async (t) => {
+test('fable is offered to pro slots; the upstream decides the entitlement', async (t) => {
   const root = project()
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
   writeTier(root, 'vm-01', 'pro')
   writeTier(root, 'vm-02', null)
+  // Pro 活动期上游会放行 Fable，本地 tier 只是推断，不能当硬门禁。
   const selected = await scheduler(root).selectAndReserve({
     model: 'claude-fable-5',
     allowWait: false,
   })
-  assert.equal(selected.ok, false)
-  assert.equal(selected.reason, 'fable_requires_max')
+  assert.equal(selected.ok, true)
+  assert.ok(['vm-01', 'vm-02'].includes(selected.vmId))
+  selected.release()
 })
 
 test('sonnet still lands on a pro slot', async (t) => {
@@ -1308,7 +1310,9 @@ test('allowed_models whitelist skips other families', async (t) => {
 test('allowed_models prefix matches dated fable ids', async (t) => {
   const root = project()
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
-  writeTier(root, 'vm-01', 'pro')
+  // vm-01 的白名单不含 fable，只有 vm-02 放行 —— 用白名单把 vm-01 挤掉，
+  // 这样测的仍然是「带日期后缀的 fable id 能否命中前缀」。
+  writeTier(root, 'vm-01', 'pro', { allowed_models: ['claude-sonnet-5'] })
   writeTier(root, 'vm-02', 'max', { allowed_models: ['claude-fable-5'] })
   const selected = await scheduler(root).selectAndReserve({
     model: 'claude-fable-5-20260801',

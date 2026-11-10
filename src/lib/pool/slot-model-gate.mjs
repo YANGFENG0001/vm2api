@@ -1,5 +1,4 @@
 import { inferClaudeTier } from './claude-tier.mjs'
-import { isFableModel } from './upstream-error-policy.mjs'
 import { getModelEntry, getPolicyCatalogIds, resolvePolicyModelId } from '../protocol/model-policy.mjs'
 import { getGptPolicyCatalogIds } from '../protocol/gpt-model-policy.mjs'
 import { isCodexCatalogModel } from '../protocol/models.mjs'
@@ -140,9 +139,14 @@ export function slotAllowsModel({ vm, account = null, model } = {}) {
   const canonical = resolvePolicyModelId(modelKey) || modelKey
   const deniedUntil = Number(account?.unified?.model_denied_until?.[canonical]) || 0
   if (deniedUntil > Date.now()) return { ok: false, reason: 'model_not_supported' }
-  if (isFableModel(modelKey) && resolveSlotTier(vm, account) !== 'max') {
-    return { ok: false, reason: 'fable_requires_max' }
-  }
+  // Fable is no longer gated on a Max tier here. Anthropic has run promotions
+  // where Pro seats get Fable for a limited window, and the local tier is a
+  // guess that cannot see them — a hard gate turned those accounts into a
+  // permanent "Fable requires an available Max account" from the panel while
+  // the upstream would have served them. The upstream decides: a real refusal
+  // comes back as 403/429 and parks the model on that account for an hour
+  // (`model_denied_until` above), so a non-entitled seat costs one probe per
+  // hour instead of being blocked forever.
   const allowed = normalizeAllowedModels(vm?.policy?.allowed_models)
   if (allowed && !modelMatchesAllowlist(modelKey, allowed)) {
     return { ok: false, reason: 'model_not_allowed' }

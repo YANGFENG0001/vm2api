@@ -187,20 +187,11 @@ function scopedSeatKey(seatKey, scope = PLATFORM_SCOPE) {
  * either, nothing will come back by waiting (503) — unless every slot is just
  * inside its operator rest window, whose open time rides along as retry_after.
  */
-function emptyPoolFailure(model, candidates, now = Date.now()) {
+function emptyPoolFailure(candidates, now = Date.now()) {
   const byReason = candidates?.rejections?.by_reason || {}
-  const gateMisses = Number(byReason.fable_requires_max) || 0
-  const otherMisses = Object.entries(byReason).filter(([reason]) => reason !== 'fable_requires_max')
-  // Fable keeps its Max gate, but only when that gate is what actually emptied
-  // the pool. A slot outside the allowlist, a slot in a weekly limit window, or
-  // an unschedulable slot used to be reported as "requires an available Max
-  // account" too, which hid the real cause from the caller.
-  if (isFableModel(model) && (gateMisses > 0 || otherMisses.length === 0)) {
-    return { reason: 'fable_requires_max', retry_after_ms: null }
-  }
   // A model no remaining slot is allowed to serve is not capacity; name it.
   const modelMisses = (Number(byReason.model_not_allowed) || 0) + (Number(byReason.model_not_supported) || 0)
-  const totalMisses = otherMisses.reduce((sum, [, count]) => sum + count, 0) || Number(gateMisses)
+  const totalMisses = Object.values(byReason).reduce((sum, count) => sum + (Number(count) || 0), 0)
   if (modelMisses > 0 && modelMisses >= totalMisses) {
     return {
       reason:
@@ -511,7 +502,7 @@ export class PoolScheduler extends EventEmitter {
       const waitCandidates = reserveMisses.length ? effectiveCandidates : candidates
       const waitAvailable = reserveMisses.length ? effectiveAvailable : available
       if (waitCandidates.length === 0) {
-        const empty = emptyPoolFailure(model, candidates)
+        const empty = emptyPoolFailure(candidates)
         return { ...fail(empty.reason, waitCandidates, waitAvailable), retry_after_ms: empty.retry_after_ms }
       }
       const waitPool = waitCandidates.filter(
@@ -680,7 +671,7 @@ export class PoolScheduler extends EventEmitter {
             const granted = this.openNewSeat(seatKey, candidates, { avoided, stickyVms })
             if (granted) return finish(granted)
             if (!candidates.length) {
-              const empty = emptyPoolFailure(model, candidates)
+              const empty = emptyPoolFailure(candidates)
               return { ...fail(empty.reason), retry_after_ms: empty.retry_after_ms }
             }
             if (!allowWait || now >= failoverDeadline) return fail('all_accounts_busy')
@@ -1420,7 +1411,7 @@ export class PoolScheduler extends EventEmitter {
   async peekAccount({ model, stickyKey = null, signal, ownerScope = PLATFORM_SCOPE, keyScope = null } = {}) {
     const candidates = await this.eligibleCandidates({ model, signal, ownerScope, keyScope })
     if (!candidates.length) {
-      const empty = emptyPoolFailure(model, candidates)
+      const empty = emptyPoolFailure(candidates)
       return { ok: false, code: empty.reason, retry_after_ms: empty.retry_after_ms }
     }
     const bound = stickyKey ? this.stickyRouter?.resolve?.(stickyKey) : null

@@ -59,14 +59,21 @@ export function KeysPage() {
   const keys = q.data?.keys || []
   // 管理员视图把租户密钥单独划出来：它们的 user_id 非空，作用域永远是「自己的槽位」，
   // 混在平台密钥里既看不出归属，也容易误改成平台作用域。
-  const users = useQuery({ ...usersQueryOptions(), enabled: isAdmin && keys.some((k) => k.user_id) })
+  const users = useQuery({
+    ...usersQueryOptions(),
+    enabled: isAdmin && keys.some((k) => k.user_id),
+  })
   const ownerNameOf = (id?: string | null) => {
     const key = String(id || '').trim()
     if (!key) return ''
     return users.data?.items?.find((u) => u.id === key)?.username || key
   }
-  const tenantKeys = isAdmin ? keys.filter((k) => !!String(k.user_id || '').trim()) : []
-  const platformKeys = isAdmin ? keys.filter((k) => !String(k.user_id || '').trim()) : keys
+  const tenantKeys = isAdmin
+    ? keys.filter((k) => !!String(k.user_id || '').trim())
+    : []
+  const platformKeys = isAdmin
+    ? keys.filter((k) => !String(k.user_id || '').trim())
+    : keys
   const editing = keys.find((k) => k.id === editId) || null
   const rotating = keys.find((k) => k.id === rotateId) || null
   const refresh = () =>
@@ -205,7 +212,10 @@ export function KeysPage() {
   }
 
   const busy =
-    toggle.isPending || resetQuota.isPending || reveal.isPending || rotate.isPending
+    toggle.isPending ||
+    resetQuota.isPending ||
+    reveal.isPending ||
+    rotate.isPending
 
   const keyRowNode = (k: ApiKeyItem, ownerName?: string) => (
     <KeyRow
@@ -260,7 +270,9 @@ export function KeysPage() {
               hint='租户自助创建，只能访问分配给自己的槽位；管理员可编辑、停用、删除'
               tone='tenant'
               rows={tenantKeys}
-              render={(rows) => rows.map((k) => keyRowNode(k, ownerNameOf(k.user_id)))}
+              render={(rows) =>
+                rows.map((k) => keyRowNode(k, ownerNameOf(k.user_id)))
+              }
             />
           </div>
         ) : (

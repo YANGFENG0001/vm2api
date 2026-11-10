@@ -23,33 +23,40 @@ test('allowlist matches aliases and dated prefixes', () => {
   assert.equal(modelMatchesAllowlist('claude-opus-5', ['claude-sonnet-5']), false)
 })
 
-test('fable requires max even if the allowlist includes it', () => {
+test('fable is not gated on tier — the upstream decides the entitlement', () => {
   const pro = slotAllowsModel({
     vm: { claude: { account_tier: 'pro' }, policy: { allowed_models: ['claude-fable-5'] } },
     model: 'claude-fable-5',
   })
-  assert.equal(pro.ok, false)
-  assert.equal(pro.reason, 'fable_requires_max')
+  assert.equal(pro.ok, true)
   const unknown = slotAllowsModel({
     vm: { claude: {}, policy: {} },
     model: 'claude-fable-5',
   })
-  assert.equal(unknown.ok, false)
-  assert.equal(unknown.reason, 'fable_requires_max')
+  assert.equal(unknown.ok, true)
   const max = slotAllowsModel({
     vm: { claude: { account_tier: 'max' }, policy: {} },
     model: 'claude-fable-5',
   })
   assert.equal(max.ok, true)
+  // 上游拒过一次后仍然会被本地拦住，不用每次重试。
+  const denied = {
+    unified: { model_denied_until: { 'claude-fable-5': Date.now() + 60_000 } },
+  }
+  assert.deepEqual(
+    slotAllowsModel({ vm: { claude: { account_tier: 'pro' }, policy: {} }, account: denied, model: 'claude-fable-5' }),
+    {
+      ok: false,
+      reason: 'model_not_supported',
+    },
+  )
 })
 
-test('explicit Pro tier and recent model denial override stale Max usage', () => {
+test('recent model denial parks the model regardless of the tier', () => {
   const vm = { claude: { account_tier: 'pro' }, policy: {} }
   const account = { unified: { account_tier: 'max', usage_has_fable: true } }
-  assert.deepEqual(slotAllowsModel({ vm, account, model: 'claude-fable-5' }), {
-    ok: false,
-    reason: 'fable_requires_max',
-  })
+  // tier 不再拦 Fable：Pro 账号在活动期也能用，本地只认上游的拒绝记录。
+  assert.deepEqual(slotAllowsModel({ vm, account, model: 'claude-fable-5' }), { ok: true })
 
   const maxVm = { claude: { account_tier: 'max' }, policy: {} }
   const denied = {
@@ -77,8 +84,7 @@ test('legacy Fable 5.1 allowlists accept the corrected id without allowing Fable
   assert.deepEqual(slotAllowsModel({ vm, model: 'claude-fable-5-1' }), { ok: true })
   assert.deepEqual(slotAllowsModel({ vm, model: 'claude-fable-5' }), { ok: false, reason: 'model_not_allowed' })
   assert.deepEqual(slotAllowsModel({ vm: { ...vm, claude: { account_tier: 'pro' } }, model: 'claude-fable-5-1' }), {
-    ok: false,
-    reason: 'fable_requires_max',
+    ok: true,
   })
 })
 
