@@ -49,10 +49,6 @@
 name: sync-upstream
 
 on:
-  push:
-    # 家宽机 108 的 systemd timer 每 5 分钟推一次空提交（发现 fork GHCR 缺
-    # 上游最新 tag 时）。复用它当同步心跳，用户侧不需要改任何东西。
-    branches: [mirror-trigger]
   workflow_dispatch:
     inputs:
       upstream_branch:
