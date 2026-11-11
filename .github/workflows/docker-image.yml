@@ -87,10 +87,6 @@
 name: docker-image
 
 on:
-  schedule:
-    # 上游发版快（约 1 小时一版）。注意：本 fork 上 schedule 实测不触发，
-    # 真正干活的是 mirror-trigger 的外部 timer，这里只作兜底。
-    - cron: '5,15,25,35,45,55 * * * *'
   workflow_run:
     # sync-upstream 每次跑完都跟一次
     workflows: ["sync-upstream"]
